@@ -29,7 +29,6 @@ def bottom_reply_keyboard():
             [KeyboardButton("🔍 Hozir Signal Ol")],
         ],
         resize_keyboard=True,
-        persistent=True,
     )
 
 
