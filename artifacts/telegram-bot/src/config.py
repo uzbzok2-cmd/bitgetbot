@@ -24,10 +24,13 @@ MAX_SPOT_ORDERS = 20
 MIN_ORDER_USDT = 1.0
 MAX_ORDER_USDT = 5.0
 
-AUTO_TRADE_CONFIDENCE = 70        # 70%+ → avtomatik savdo, signal yuboriladi
-SIGNAL_NOTIFY_THRESHOLD = 70      # foydalanuvchiga signal yuboriladigan minimum
-MIN_SIGNAL_CONFIDENCE = 55        # tahlil uchun minimum (tarixi saqlanadi)
-ASK_PERMISSION_CONFIDENCE_MIN = 0 # o'chirildi — faqat 70%+ auto
+# Har bir avtomatik pozitsiyaga balansnin necha foizi ishlatilsin (default 5%)
+AUTO_TRADE_BALANCE_PCT = 5.0
+
+AUTO_TRADE_CONFIDENCE = 70
+SIGNAL_NOTIFY_THRESHOLD = 70
+MIN_SIGNAL_CONFIDENCE = 60        # 60%+ dan yuqori signallar tarixga saqlanadi
+ASK_PERMISSION_CONFIDENCE_MIN = 0
 ASK_PERMISSION_CONFIDENCE_MAX = 0
 
 SIGNAL_CHECK_INTERVAL = 300
@@ -41,3 +44,6 @@ SHORT_TRADE_HOURS_MAX = 48
 
 TOP_SYMBOLS_COUNT = 10
 SCAN_TOP_N = 30
+
+# 4 ta maxsus tahlil symbollari (BTC, ETH, PAXG, XAUT)
+ANALYSIS_SYMBOLS = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "XAUTUSDT"]

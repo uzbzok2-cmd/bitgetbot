@@ -11,6 +11,14 @@ authenticated_users: Set[int] = set()
 # ── Auto-trade toggle ─────────────────────────────────────────────────
 auto_trade_enabled: bool = True
 
+# ── Balans foizi sozlamasi (default 5%) ───────────────────────────────
+trade_balance_pct: float = 5.0  # har bir avtomatik pozitsiyaga balansnin necha %
+
+# ── Manual trade setup (4 ta maxsus crypto uchun) ────────────────────
+pending_manual_trades: Dict[str, Dict] = {}   # symbol -> signal dict
+waiting_trade_input: Dict[int, Dict] = {}     # user_id -> {symbol, signal, direction}
+
+
 # ── Live scanner activity ─────────────────────────────────────────────
 class ScannerState:
     def __init__(self):
@@ -37,7 +45,7 @@ scanner = ScannerState()
 
 # ── Signal history ────────────────────────────────────────────────────
 class SignalHistory:
-    def __init__(self, max_size: int = 200):
+    def __init__(self, max_size: int = 500):
         self.signals: List[Dict] = []
         self.max_size = max_size
 
@@ -45,6 +53,9 @@ class SignalHistory:
         entry = dict(signal)
         entry["saved_at"] = int(time.time())
         entry["saved_at_str"] = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
+        # outcome: None = kutilmoqda, "TP" = foyda, "SL" = zarar
+        if "outcome" not in entry:
+            entry["outcome"] = None
         self.signals.insert(0, entry)
         if len(self.signals) > self.max_size:
             self.signals = self.signals[:self.max_size]
@@ -55,12 +66,19 @@ class SignalHistory:
         ).timestamp()
         return [s for s in self.signals if s.get("saved_at", 0) >= today_start]
 
+    def get_period(self, days: int) -> List[Dict]:
+        start = time.time() - days * 86400
+        return [s for s in self.signals if s.get("saved_at", 0) >= start]
+
     def get_all(self) -> List[Dict]:
         return self.signals
 
+    def get_above_conf(self, min_conf: int = 60) -> List[Dict]:
+        return [s for s in self.signals if s.get("confidence", 0) >= min_conf]
+
 signal_history = SignalHistory()
 
-# ── Permission-pending signals (55-60%) ──────────────────────────────
+# ── Permission-pending signals ────────────────────────────────────────
 pending_permission_signals: Dict[str, Dict] = {}
 
 # ── Notifier chat_id (set on first /start after auth) ────────────────

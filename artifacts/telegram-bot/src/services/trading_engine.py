@@ -3,9 +3,10 @@ Auto-trading engine:
 - Scans markets every 5 min
 - 70%+ → auto trade + sends signal with chart image
 - <70% → saved to history only (no auto-send, no auto-trade)
-- Min order $1, Max $5
+- TP1 = 80% of position, TP2 = 20%
 """
 import asyncio
+import re
 import time
 import logging
 from typing import Optional, List, Dict
@@ -18,7 +19,7 @@ from services import state as gs
 from config import (
     ORDER_RATIO, MAX_FUTURES_ORDERS,
     AUTO_TRADE_CONFIDENCE, SIGNAL_NOTIFY_THRESHOLD,
-    MIN_ORDER_USDT, MAX_ORDER_USDT
+    MIN_ORDER_USDT, MAX_ORDER_USDT, MIN_SIGNAL_CONFIDENCE
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,6 @@ SKIP_TP_SL_SYMBOLS = {"PAXGUSDT", "XAUTUSDT", "BGBUSDT"}
 
 
 def _price_scale(price: float) -> int:
-    """Narx kattaligiga qarab o'nlik raqamlar sonini aniqlaydi."""
     if price >= 10000:
         return 1
     elif price >= 100:
@@ -47,6 +47,31 @@ def _price_scale(price: float) -> int:
     return 8
 
 
+def _place_tp_sl_with_retry(client, symbol, plan_type, trig, hold_side, sz):
+    """TP/SL qo'y — checkScale xatosida avtomatik retry."""
+    r = client.place_futures_tp_sl(
+        symbol=symbol, plan_type=plan_type,
+        trigger_price=str(trig), side=hold_side, size=str(sz)
+    )
+    if r.get("code") == "00000":
+        return True, trig
+    msg = r.get("msg", "")
+    m = re.search(r"checkScale=(\d+)", msg)
+    if m:
+        correct_scale = int(m.group(1))
+        trig_fixed = round(trig, correct_scale)
+        r2 = client.place_futures_tp_sl(
+            symbol=symbol, plan_type=plan_type,
+            trigger_price=str(trig_fixed), side=hold_side, size=str(sz)
+        )
+        if r2.get("code") == "00000":
+            return True, trig_fixed
+        logger.warning(f"⚠️ {symbol} {plan_type} retry xato: {r2.get('msg')}")
+        return False, trig_fixed
+    logger.warning(f"⚠️ {symbol} {plan_type} xato: {msg}")
+    return False, trig
+
+
 class TradingEngine:
     def __init__(self, client: BitgetClient, bot=None):
         self.client = client
@@ -55,7 +80,6 @@ class TradingEngine:
         self.scan_interval = 300
         self.active_futures_signals: Dict = {}
 
-    # ── helpers ────────────────────────────────────────────
     async def _futures_balance(self) -> float:
         try:
             d = self.client.get_futures_account()
@@ -103,10 +127,11 @@ class TradingEngine:
         return PRIORITY_SYMBOLS
 
     def _calc_order_usdt(self, balance: float) -> float:
-        raw = balance * 0.50 * ORDER_RATIO
+        """Balansnin trade_balance_pct foizini ishlatamiz."""
+        pct = gs.trade_balance_pct / 100.0
+        raw = balance * pct
         return max(MIN_ORDER_USDT, min(MAX_ORDER_USDT, raw))
 
-    # ── main loops ─────────────────────────────────────────
     async def run_futures_scanner(self):
         while self.active:
             try:
@@ -116,7 +141,6 @@ class TradingEngine:
                 gs.scanner.add_log(f"❌ Xato: {str(e)[:50]}")
             await asyncio.sleep(self.scan_interval)
 
-    # ── futures scan ───────────────────────────────────────
     async def _scan_futures(self):
         gs.scanner.is_scanning    = True
         gs.scanner.signals_this_scan = 0
@@ -131,7 +155,7 @@ class TradingEngine:
         balance    = await self._futures_balance()
         order_usdt = self._calc_order_usdt(balance)
 
-        gs.scanner.add_log(f"💼 {balance:.2f}$ | Order: {order_usdt:.2f}$ | Ochiq: {open_count}")
+        gs.scanner.add_log(f"💼 {balance:.2f}$ | Order: {order_usdt:.2f}$ ({gs.trade_balance_pct}%) | Ochiq: {open_count}")
 
         symbols = await self._top_futures_symbols(30)
         gs.scanner.total_symbols  = len(symbols)
@@ -156,16 +180,15 @@ class TradingEngine:
                 conf = sig["confidence"]
                 gs.scanner.add_log(f"📊 {symbol}: {sig['direction']} {conf}%")
 
-                # Always save to history
-                gs.signal_history.add(sig)
-                gs.scanner.signals_this_scan += 1
+                # 60%+ signallar tarixga saqlanadi
+                if conf >= MIN_SIGNAL_CONFIDENCE:
+                    gs.signal_history.add(sig)
+                    gs.scanner.signals_this_scan += 1
 
-                # Only act on 70%+ signals
+                # 70%+ signallar — signal yuboriladi + avtosavdo
                 if conf >= SIGNAL_NOTIFY_THRESHOLD:
-                    # Send signal with chart to user
                     await self._send_signal_with_chart(sig, raw)
 
-                    # Auto trade if enabled and room available
                     if (gs.auto_trade_enabled and
                             open_count < MAX_FUTURES_ORDERS and
                             balance >= MIN_ORDER_USDT and
@@ -183,7 +206,6 @@ class TradingEngine:
         gs.scanner.current_symbol  = ""
         gs.scanner.add_log(f"✅ Skan tugadi. 70%+ signallar: {gs.scanner.signals_this_scan}")
 
-    # ── send signal + chart ────────────────────────────────
     async def _send_signal_with_chart(self, sig: Dict, candles_data: list):
         if not self.bot or not gs.notifier_chat_id:
             return
@@ -194,7 +216,6 @@ class TradingEngine:
         conf = sig["confidence"]
         duration = estimate_trade_duration(tf, conf)
         try:
-            # Send chart image first
             try:
                 from services.chart_generator import generate_signal_chart
                 buf = generate_signal_chart(
@@ -217,7 +238,6 @@ class TradingEngine:
             except Exception as chart_err:
                 logger.warning(f"Chart error: {chart_err}")
 
-            # Then send text detail (no delete)
             await self.bot.send_message(
                 chat_id=gs.notifier_chat_id,
                 text=text,
@@ -226,7 +246,6 @@ class TradingEngine:
         except Exception as e:
             logger.error(f"Send signal error: {e}")
 
-    # ── place futures trade ────────────────────────────────
     async def _place_futures_trade(self, signal: Dict, order_usdt: float, candles_data: list):
         symbol = signal["symbol"]
         dir_   = signal["direction"]
@@ -254,7 +273,6 @@ class TradingEngine:
             final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
             side = "sell"; hold_side = "short"
 
-        # Size
         size = order_usdt * max_lev / entry
         try:
             d = self.client.get_futures_contract_info(symbol)
@@ -294,21 +312,19 @@ class TradingEngine:
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
 
-        tp1_size = round(size / 2, 4)
+        # TP1 = 80% of position, TP2 = 20%
+        tp1_size = round(size * 0.8, 4)
+        tp2_size = round(size * 0.2, 4)
         for plan_type, trig, sz in [
             ("profit_loss", final_tp1, tp1_size),
-            ("profit_loss", final_tp2, tp1_size),
+            ("profit_loss", final_tp2, tp2_size),
             ("loss_plan",   final_sl,  size),
         ]:
             try:
-                self.client.place_futures_tp_sl(
-                    symbol=symbol, plan_type=plan_type,
-                    trigger_price=str(trig), side=hold_side, size=str(sz)
-                )
+                _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
             except Exception as e:
                 logger.error(f"TP/SL error {symbol}: {e}")
 
-        # Send trade notification with position chart
         if self.bot and gs.notifier_chat_id:
             from utils.formatters import format_auto_trade_notify
             text = format_auto_trade_notify(
@@ -339,7 +355,85 @@ class TradingEngine:
             except Exception as e:
                 logger.error(f"Trade notify error: {e}")
 
-    # ── set TP/SL for existing open positions ─────────────
+    async def place_manual_trade(self, symbol: str, signal: Dict, order_usdt: float):
+        """Manual 'Savdoga kirish' tugmasi — PAXG/XAUT/BTC/ETH uchun."""
+        dir_   = signal["direction"]
+        entry  = signal["entry"]
+        atr    = signal.get("atr", entry * 0.02)
+        max_lev = await self._get_max_leverage(symbol)
+
+        try:
+            self.client.set_margin_mode(symbol, "crossed")
+            self.client.set_leverage(symbol, max_lev, hold_side="long")
+            self.client.set_leverage(symbol, max_lev, hold_side="short")
+        except Exception:
+            pass
+
+        commission = 0.0006 * 2 * max_lev
+        atr_r = atr / entry
+        if dir_ == "LONG":
+            final_tp1 = round(entry * (1 + atr_r * 1.5 - commission), 8)
+            final_tp2 = round(entry * (1 + atr_r * 3.0 - commission), 8)
+            final_sl  = round(entry * (1 - atr_r * 1.5 - commission), 8)
+            side = "buy"; hold_side = "long"
+        else:
+            final_tp1 = round(entry * (1 - atr_r * 1.5 + commission), 8)
+            final_tp2 = round(entry * (1 - atr_r * 3.0 + commission), 8)
+            final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
+            side = "sell"; hold_side = "short"
+
+        size = order_usdt * max_lev / entry
+        try:
+            d = self.client.get_futures_contract_info(symbol)
+            if d.get("code") == "00000":
+                contracts = d.get("data", [])
+                if contracts:
+                    c = contracts[0]
+                    min_size = safe_float(c.get("minTradeNum", 0.001))
+                    prec = len(str(min_size).split(".")[-1]) if "." in str(min_size) else 4
+                    size = max(min_size, round(size, prec))
+        except Exception:
+            size = round(size, 4)
+
+        if size <= 0:
+            return None, "Hajm 0 dan kichik"
+
+        result = self.client.place_futures_order(
+            symbol=symbol, side=side, trade_side="open",
+            size=str(size), order_type="market"
+        )
+        if result.get("code") != "00000":
+            return None, result.get("msg", "Order xatosi")
+
+        order_id = result.get("data", {}).get("orderId", "")
+
+        # TP1=80%, TP2=20%
+        tp1_size = round(size * 0.8, 4)
+        tp2_size = round(size * 0.2, 4)
+        # PAXG/XAUT uchun TP/SL qo'yilmaydi
+        if symbol not in SKIP_TP_SL_SYMBOLS:
+            for plan_type, trig, sz in [
+                ("profit_loss", final_tp1, tp1_size),
+                ("profit_loss", final_tp2, tp2_size),
+                ("loss_plan",   final_sl,  size),
+            ]:
+                try:
+                    _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+                except Exception as e:
+                    logger.error(f"Manual TP/SL error {symbol}: {e}")
+
+        trade_info = {
+            "symbol": symbol, "direction": dir_,
+            "leverage": max_lev, "size": size, "margin": order_usdt,
+            "entry": entry, "tp1": final_tp1, "tp2": final_tp2, "sl": final_sl,
+            "order_id": order_id
+        }
+        gs.scanner.active_trades[symbol] = {
+            **trade_info,
+            "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
+        }
+        return trade_info, None
+
     async def set_tp_sl_for_existing_positions(self):
         """Mavjud ochiq pozitsiyalarga TP/SL qo'y (PAXG/XAUT/BGB bundan mustasno)."""
         try:
@@ -353,7 +447,6 @@ class TradingEngine:
                 logger.info("Ochiq pozitsiyalar yo'q")
                 return
 
-            # Mavjud TP/SL orderlarni olamiz
             plan_d = self.client.get_futures_plan_orders()
             symbols_with_tpsl = set()
             if plan_d.get("code") == "00000":
@@ -370,12 +463,10 @@ class TradingEngine:
                 size      = safe_float(pos.get("total", 0))
                 avg_price = safe_float(pos.get("openPriceAvg", 0))
 
-                # PAXG, XAUT, BGB — o'tkazib yuboramiz
                 if symbol in SKIP_TP_SL_SYMBOLS:
                     logger.info(f"⏭️ {symbol} skip (PAXG/XAUT/BGB)")
                     continue
 
-                # Allaqachon TP/SL bor bo'lsa o'tkazib yuboramiz
                 if symbol in symbols_with_tpsl:
                     logger.info(f"✅ {symbol} — TP/SL allaqachon mavjud")
                     continue
@@ -395,27 +486,25 @@ class TradingEngine:
                     raw = candles.get("data", [])
                     sig = analyze_symbol(raw, symbol, "1H")
 
-                    # ATR hisoblash (signal bo'lsa — undan, bo'lmasa — narx asosida)
                     if sig:
                         atr = sig["atr"]
                     else:
-                        import numpy as np
                         closes = [safe_float(c[4]) for c in raw if len(c) > 4]
                         highs  = [safe_float(c[2]) for c in raw if len(c) > 2]
                         lows   = [safe_float(c[3]) for c in raw if len(c) > 3]
                         if len(closes) >= 14:
                             from services.analyzer import compute_atr
+                            import numpy as np
                             atr = compute_atr(
-                                __import__("numpy").array(highs),
-                                __import__("numpy").array(lows),
-                                __import__("numpy").array(closes), 14
+                                np.array(highs),
+                                np.array(lows),
+                                np.array(closes), 14
                             )
                         else:
-                            atr = avg_price * 0.02  # fallback: 2%
+                            atr = avg_price * 0.02
 
                     atr_r = atr / avg_price
                     commission = 0.0006 * 2
-                    # Narx precision: Bitget har bir symbol uchun o'z scale'ini talab qiladi
                     price_scale = _price_scale(avg_price)
                     if direction == "LONG":
                         tp1 = round(avg_price * (1 + atr_r * 1.5 - commission), price_scale)
@@ -426,46 +515,25 @@ class TradingEngine:
                         tp2 = round(avg_price * (1 - atr_r * 3.0 + commission), price_scale)
                         sl  = round(avg_price * (1 + atr_r * 1.5 + commission), price_scale)
 
-                    tp1_size = round(size / 2, 4)
+                    # TP1 = 80%, TP2 = 20%
+                    tp1_size = round(size * 0.8, 4)
+                    tp2_size = round(size * 0.2, 4)
                     success = True
-                    # pos_profit/pos_loss = mavjud pozitsiya uchun TP/SL plan type
                     for plan_type, trig, sz in [
                         ("pos_profit", tp1, tp1_size),
-                        ("pos_profit", tp2, tp1_size),
+                        ("pos_profit", tp2, tp2_size),
                         ("pos_loss",   sl,  size),
                     ]:
-                        r = self.client.place_futures_tp_sl(
-                            symbol=symbol, plan_type=plan_type,
-                            trigger_price=str(trig), side=hold_side, size=str(sz)
-                        )
-                        if r.get("code") == "00000":
+                        ok, _ = _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+                        if ok:
                             logger.info(f"✅ {symbol} {plan_type}: {trig}")
                         else:
-                            msg = r.get("msg", "")
-                            # checkScale xatosi: Bitget narx decimallari sonini bildiradi
-                            import re
-                            m = re.search(r"checkScale=(\d+)", msg)
-                            if m:
-                                correct_scale = int(m.group(1))
-                                trig_fixed = round(trig, correct_scale)
-                                r2 = self.client.place_futures_tp_sl(
-                                    symbol=symbol, plan_type=plan_type,
-                                    trigger_price=str(trig_fixed), side=hold_side, size=str(sz)
-                                )
-                                if r2.get("code") == "00000":
-                                    logger.info(f"✅ {symbol} {plan_type} (retry): {trig_fixed}")
-                                else:
-                                    logger.warning(f"⚠️ {symbol} {plan_type} retry xato: {r2.get('msg')}")
-                                    success = False
-                            else:
-                                logger.warning(f"⚠️ {symbol} {plan_type} xato: {msg}")
-                                success = False
+                            success = False
 
                     if success:
                         set_count += 1
                         gs.scanner.add_log(f"🎯 {symbol} TP/SL qo'yildi")
 
-                    # Telegram xabar
                     if self.bot and gs.notifier_chat_id:
                         dir_e = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
                         status = "✅ Muvaffaqiyatli" if success else "⚠️ Qisman"
@@ -475,8 +543,8 @@ class TradingEngine:
                             f"💎 <b>{symbol}</b> — {dir_e}\n"
                             f"💲 Kirish narxi: <code>${avg_price}</code>\n"
                             f"{'─'*24}\n"
-                            f"💚 TP1: <code>${tp1}</code>\n"
-                            f"💚 TP2: <code>${tp2}</code>\n"
+                            f"💚 TP1 (80%): <code>${tp1}</code>\n"
+                            f"💚 TP2 (20%): <code>${tp2}</code>\n"
                             f"🛑 SL:  <code>${sl}</code>"
                         )
                         try:
@@ -497,7 +565,6 @@ class TradingEngine:
         except Exception as e:
             logger.error(f"set_tp_sl_for_existing_positions xato: {e}")
 
-    # ── get top signals for display ────────────────────────
     async def get_top_signals(self, top_n: int = 10, min_conf: int = 70) -> List[Dict]:
         symbols = await self._top_futures_symbols(40)
         signals = []
@@ -509,7 +576,8 @@ class TradingEngine:
                     sig = analyze_symbol(candles.get("data", []), symbol, "1H")
                     if sig and sig["confidence"] >= min_conf:
                         signals.append(sig)
-                        gs.signal_history.add(sig)
+                        if sig["confidence"] >= 60:
+                            gs.signal_history.add(sig)
                 await asyncio.sleep(0.2)
             except Exception:
                 pass
