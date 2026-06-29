@@ -41,4 +41,4 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["glibcLocales"]
+packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "pkg-config", "qhull", "tcl", "tk", "zlib"]

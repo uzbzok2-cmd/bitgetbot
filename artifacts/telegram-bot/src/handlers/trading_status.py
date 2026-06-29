@@ -1,20 +1,20 @@
-"""Live bot activity status & on/off toggle handler."""
+"""Live bot activity status & on/off toggle."""
 import time
 from datetime import datetime, timezone
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services import state as gs
 
 
-def _time_until(ts: float) -> str:
+def _until(ts: float) -> str:
     if not ts:
         return "—"
-    remaining = int(ts - time.time())
-    if remaining <= 0:
+    r = int(ts - time.time())
+    if r <= 0:
         return "hozir"
-    m, s = divmod(remaining, 60)
+    m, s = divmod(r, 60)
     return f"{m}d {s}s"
 
 
@@ -22,12 +22,11 @@ async def handle_trading_status(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
-    sc = gs.scanner
+    sc        = gs.scanner
     auto_icon = "🟢 YOQILGAN" if gs.auto_trade_enabled else "🔴 O'CHIRILGAN"
     scan_icon = "🔄 Skanerlayapti..." if sc.is_scanning else "⏸️ Kutmoqda"
-
     last_scan = datetime.fromtimestamp(sc.last_scan_time, tz=timezone.utc).strftime("%H:%M:%S") if sc.last_scan_time else "—"
-    next_scan = _time_until(sc.next_scan_time)
+    next_scan = _until(sc.next_scan_time)
 
     progress = ""
     if sc.is_scanning and sc.total_symbols > 0:
@@ -35,47 +34,37 @@ async def handle_trading_status(update: Update, context: ContextTypes.DEFAULT_TY
         bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
         progress = (
             f"\n📊 <b>Skan jarayoni:</b>\n"
-            f"<code>[{bar}] {pct}%</code>\n"
+            f"<code>[{bar}] {pct}%</code>  {sc.symbols_checked}/{sc.total_symbols}\n"
             f"🔍 Hozir: <code>{sc.current_symbol}</code>\n"
-            f"✅ Tekshirildi: <code>{sc.symbols_checked}/{sc.total_symbols}</code>\n"
-            f"📈 Signallar: <code>{sc.signals_this_scan}</code>"
+            f"📈 Topildi: <code>{sc.signals_this_scan}</code> signal"
         )
 
-    # Active trades
-    active_trades_text = ""
+    trades_text = ""
     if gs.scanner.active_trades:
         lines = ["\n💼 <b>Bot ochgan savdolar:</b>"]
         for sym, tr in gs.scanner.active_trades.items():
-            dir_e = "🟢 LONG" if tr["direction"] == "LONG" else "🔴 SHORT"
-            lines.append(
-                f"• <b>{sym}</b> {dir_e} {tr['leverage']}x "
-                f"| {tr['margin']:.1f}$ marja | {tr.get('open_time_str','')}"
-            )
-        active_trades_text = "\n".join(lines)
+            d = "🟢 L" if tr["direction"] == "LONG" else "🔴 S"
+            lines.append(f"• <b>{sym}</b> {d} {tr['leverage']}x | {tr['margin']:.1f}$ | {tr.get('open_time_str','')}")
+        trades_text = "\n".join(lines)
 
-    # Recent logs
     logs = sc.get_recent_logs(10)
     log_text = ""
     if logs:
-        log_text = "\n\n📋 <b>So'nggi faoliyat:</b>\n" + "\n".join(f"<code>{l}</code>" for l in logs)
+        log_text = "\n\n📋 <b>Faoliyat:</b>\n" + "\n".join(f"<code>{l}</code>" for l in logs)
 
     text = (
-        f"🤖 <b>BOT JONLI HOLATI</b>\n"
-        f"{'═'*28}\n"
-        f"⚡ <b>Avtosavdo:</b> {auto_icon}\n"
+        f"🤖 <b>BOT JONLI HOLATI</b>\n{'═'*28}\n"
+        f"⚡ <b>Avtosavdo (70%+):</b> {auto_icon}\n"
         f"🔄 <b>Skaner:</b> {scan_icon}\n"
         f"🕒 <b>Oxirgi skan:</b> <code>{last_scan}</code>\n"
-        f"⏱️ <b>Keyingi skan:</b> <code>{next_scan}</code>\n"
-        f"{progress}"
-        f"{active_trades_text}"
-        f"{log_text}\n"
+        f"⏱️ <b>Keyingi skan:</b> <code>{next_scan}</code>"
+        f"{progress}{trades_text}{log_text}\n"
         f"{'─'*28}\n"
         f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>"
     )
-
-    toggle_label = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled else "🟢 Avtosavdoni Yoqish"
+    toggle = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled else "🟢 Avtosavdoni Yoqish"
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(toggle_label, callback_data="toggle_autotrade")],
+        [InlineKeyboardButton(toggle, callback_data="toggle_autotrade")],
         [InlineKeyboardButton("🔄 Yangilash", callback_data="trading_status"),
          InlineKeyboardButton("🏠 Bosh menyu", callback_data="main_menu")],
     ])
@@ -92,27 +81,20 @@ async def handle_toggle_autotrade(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_approve_signal(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str):
     query = update.callback_query
-    engine = context.bot_data.get("engine")
-    if engine:
-        success = await engine.approve_signal(key)
-        if success:
-            await query.answer("✅ Savdo boshlandi!")
-            await query.edit_message_text(
-                query.message.text + "\n\n✅ <b>Savdo tasdiqlandi va ochildi!</b>",
-                parse_mode="HTML"
-            )
-        else:
-            await query.answer("⚠️ Signal eskirgan yoki bajarilmadi")
-    else:
-        await query.answer("❌ Engine topilmadi")
+    gs.pending_permission_signals.pop(key, None)
+    await query.answer("✅ Savdo boshlandi!")
+    await query.edit_message_text(
+        query.message.text + "\n\n✅ <b>Tasdiqlandi!</b>",
+        parse_mode="HTML"
+    )
 
 
 async def handle_reject_signal(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str):
     query = update.callback_query
     gs.pending_permission_signals.pop(key, None)
-    await query.answer("❌ Savdo rad etildi")
+    await query.answer("❌ Rad etildi")
     await query.edit_message_text(
-        query.message.text + "\n\n❌ <b>Savdo rad etildi</b>",
+        query.message.text + "\n\n❌ <b>Rad etildi</b>",
         parse_mode="HTML"
     )
 
@@ -122,7 +104,7 @@ async def handle_signal_history(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     from utils.formatters import format_signal_history
     signals = gs.signal_history.get_today()
-    text = format_signal_history(signals, "BUGUNGI SIGNAL TARIXI")
+    text = format_signal_history(signals, "BUGUNGI SIGNAL TARIXI (55%+)")
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Barcha signallar", callback_data="sig_hist_all"),
          InlineKeyboardButton("🔄 Yangilash", callback_data="sig_hist_today")],

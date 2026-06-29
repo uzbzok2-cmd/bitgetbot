@@ -4,7 +4,10 @@ from telegram.ext import ContextTypes
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from handlers.main_menu import handle_main_menu, handle_bot_status, handle_about
+from handlers.main_menu import (
+    handle_main_menu, handle_bot_status, handle_about,
+    do_coin_analysis_callback
+)
 from handlers.futures_handlers import (
     show_futures_main, handle_futures_balance, handle_futures_positions,
     handle_futures_open_orders, handle_futures_tpsl,
@@ -30,7 +33,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_main_menu(update, context)
     elif data == "about":
         await handle_about(update, context)
-    elif data in ("bot_status",):
+    elif data == "bot_status":
         await handle_bot_status(update, context)
 
     # ── Futures ───────────────────────────────────────────
@@ -77,7 +80,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "spot_hist_all":
         await handle_spot_history(update, context, "all")
 
-    # ── Trading status & auto-trade toggle ────────────────
+    # ── BTC / ETH analysis ────────────────────────────────
+    elif data == "btc_analysis":
+        await do_coin_analysis_callback(update, context, "BTCUSDT")
+    elif data == "eth_analysis":
+        await do_coin_analysis_callback(update, context, "ETHUSDT")
+
+    # ── Trading status ────────────────────────────────────
     elif data == "trading_status":
         await handle_trading_status(update, context)
     elif data == "toggle_autotrade":
@@ -91,11 +100,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Permission approve/reject ─────────────────────────
     elif data.startswith("approve_"):
-        key = data[len("approve_"):]
-        await handle_approve_signal(update, context, key)
+        await handle_approve_signal(update, context, data[len("approve_"):])
     elif data.startswith("reject_"):
-        key = data[len("reject_"):]
-        await handle_reject_signal(update, context, key)
+        await handle_reject_signal(update, context, data[len("reject_"):])
 
     else:
         await query.answer(f"⚠️ Noma'lum: {data[:30]}")
