@@ -32,7 +32,7 @@ args = "python artifacts/telegram-bot/src/bot.py"
 outputType = "console"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
