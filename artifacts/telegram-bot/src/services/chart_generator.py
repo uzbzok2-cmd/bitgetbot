@@ -40,6 +40,7 @@ def generate_signal_chart(
     confidence: int,
     timeframe: str = "1H",
     last_n: int = 60,
+    duration_label: str = "",
 ) -> io.BytesIO:
     """
     Generate dark-theme candlestick chart with Entry, TP1, TP2, SL levels.
@@ -128,8 +129,9 @@ def generate_signal_chart(
 
     # ── Title ─────────────────────────────────────────────
     dir_text = "🟢 XARID (LONG)" if direction == "LONG" else "🔴 SOTISH (SHORT)"
+    dur_part = f"  •  {duration_label}" if duration_label else ""
     ax.set_title(
-        f"{symbol}  •  {timeframe}  |  {dir_text}  •  {confidence}% ishonch",
+        f"{symbol}  •  {timeframe}  |  {dir_text}  •  {confidence}% ishonch{dur_part}",
         color=TEXT_C, fontsize=10, fontweight="bold", pad=8
     )
 

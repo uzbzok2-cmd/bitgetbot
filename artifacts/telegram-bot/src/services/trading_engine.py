@@ -28,6 +28,9 @@ PRIORITY_SYMBOLS = [
     "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LTCUSDT", "DOTUSDT",
 ]
 
+# Bu symbollar uchun TP/SL qo'yilmaydi
+SKIP_TP_SL_SYMBOLS = {"PAXGUSDT", "XAUTUSDT", "BGBUSDT"}
+
 
 class TradingEngine:
     def __init__(self, client: BitgetClient, bot=None):
@@ -170,7 +173,11 @@ class TradingEngine:
         if not self.bot or not gs.notifier_chat_id:
             return
         from utils.formatters import format_signal_detail
+        from services.analyzer import estimate_trade_duration
         text = format_signal_detail(sig)
+        tf = sig.get("timeframe", "1H")
+        conf = sig["confidence"]
+        duration = estimate_trade_duration(tf, conf)
         try:
             # Send chart image first
             try:
@@ -184,12 +191,13 @@ class TradingEngine:
                     tp2=sig["tp2"],
                     sl=sig["sl"],
                     confidence=sig["confidence"],
-                    timeframe=sig.get("timeframe", "1H"),
+                    timeframe=tf,
+                    duration_label=duration,
                 )
                 await self.bot.send_photo(
                     chat_id=gs.notifier_chat_id,
                     photo=buf,
-                    caption=f"📊 {sig['symbol']} — {sig['confidence']}% ishonch"
+                    caption=f"📊 {sig['symbol']} — {sig['confidence']}% ishonch  |  ⌛ {duration}"
                 )
             except Exception as chart_err:
                 logger.warning(f"Chart error: {chart_err}")
@@ -315,6 +323,144 @@ class TradingEngine:
                 )
             except Exception as e:
                 logger.error(f"Trade notify error: {e}")
+
+    # ── set TP/SL for existing open positions ─────────────
+    async def set_tp_sl_for_existing_positions(self):
+        """Mavjud ochiq pozitsiyalarga TP/SL qo'y (PAXG/XAUT/BGB bundan mustasno)."""
+        try:
+            pos_d = self.client.get_futures_positions()
+            if pos_d.get("code") != "00000":
+                logger.warning("Pozitsiyalar olinmadi")
+                return
+
+            positions = [p for p in pos_d.get("data", []) if safe_float(p.get("total", 0)) > 0]
+            if not positions:
+                logger.info("Ochiq pozitsiyalar yo'q")
+                return
+
+            # Mavjud TP/SL orderlarni olamiz
+            plan_d = self.client.get_futures_plan_orders()
+            symbols_with_tpsl = set()
+            if plan_d.get("code") == "00000":
+                plan_list = plan_d.get("data") or []
+                if isinstance(plan_list, dict):
+                    plan_list = plan_list.get("entrustedList", [])
+                for pl in (plan_list if isinstance(plan_list, list) else []):
+                    symbols_with_tpsl.add(pl.get("symbol", ""))
+
+            set_count = 0
+            for pos in positions:
+                symbol    = pos.get("symbol", "")
+                hold_side = pos.get("holdSide", "")
+                size      = safe_float(pos.get("total", 0))
+                avg_price = safe_float(pos.get("openPriceAvg", 0))
+
+                # PAXG, XAUT, BGB — o'tkazib yuboramiz
+                if symbol in SKIP_TP_SL_SYMBOLS:
+                    logger.info(f"⏭️ {symbol} skip (PAXG/XAUT/BGB)")
+                    continue
+
+                # Allaqachon TP/SL bor bo'lsa o'tkazib yuboramiz
+                if symbol in symbols_with_tpsl:
+                    logger.info(f"✅ {symbol} — TP/SL allaqachon mavjud")
+                    continue
+
+                if avg_price <= 0 or size <= 0:
+                    continue
+
+                direction = "LONG" if hold_side == "long" else "SHORT"
+                logger.info(f"🎯 {symbol} {direction} uchun TP/SL qo'yilmoqda...")
+
+                try:
+                    candles = self.client.get_futures_candles(symbol, "1H", 150)
+                    if candles.get("code") != "00000":
+                        logger.warning(f"Candles olinmadi {symbol}: {candles.get('msg')}")
+                        continue
+
+                    raw = candles.get("data", [])
+                    sig = analyze_symbol(raw, symbol, "1H")
+
+                    # ATR hisoblash (signal bo'lsa — undan, bo'lmasa — narx asosida)
+                    if sig:
+                        atr = sig["atr"]
+                    else:
+                        import numpy as np
+                        closes = [safe_float(c[4]) for c in raw if len(c) > 4]
+                        highs  = [safe_float(c[2]) for c in raw if len(c) > 2]
+                        lows   = [safe_float(c[3]) for c in raw if len(c) > 3]
+                        if len(closes) >= 14:
+                            from services.analyzer import compute_atr
+                            atr = compute_atr(
+                                __import__("numpy").array(highs),
+                                __import__("numpy").array(lows),
+                                __import__("numpy").array(closes), 14
+                            )
+                        else:
+                            atr = avg_price * 0.02  # fallback: 2%
+
+                    atr_r = atr / avg_price
+                    commission = 0.0006 * 2
+                    if direction == "LONG":
+                        tp1 = round(avg_price * (1 + atr_r * 1.5 - commission), 8)
+                        tp2 = round(avg_price * (1 + atr_r * 3.0 - commission), 8)
+                        sl  = round(avg_price * (1 - atr_r * 1.5 - commission), 8)
+                    else:
+                        tp1 = round(avg_price * (1 - atr_r * 1.5 + commission), 8)
+                        tp2 = round(avg_price * (1 - atr_r * 3.0 + commission), 8)
+                        sl  = round(avg_price * (1 + atr_r * 1.5 + commission), 8)
+
+                    tp1_size = round(size / 2, 4)
+                    success = True
+                    for plan_type, trig, sz in [
+                        ("profit_loss", tp1, tp1_size),
+                        ("profit_loss", tp2, tp1_size),
+                        ("loss_plan",   sl,  size),
+                    ]:
+                        r = self.client.place_futures_tp_sl(
+                            symbol=symbol, plan_type=plan_type,
+                            trigger_price=str(trig), side=hold_side, size=str(sz)
+                        )
+                        if r.get("code") == "00000":
+                            logger.info(f"✅ {symbol} {plan_type}: {trig}")
+                        else:
+                            logger.warning(f"⚠️ {symbol} {plan_type} xato: {r.get('msg')}")
+                            success = False
+
+                    if success:
+                        set_count += 1
+                        gs.scanner.add_log(f"🎯 {symbol} TP/SL qo'yildi")
+
+                    # Telegram xabar
+                    if self.bot and gs.notifier_chat_id:
+                        dir_e = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+                        status = "✅ Muvaffaqiyatli" if success else "⚠️ Qisman"
+                        text = (
+                            f"🎯 <b>TP/SL QUYILDI</b> {status}\n"
+                            f"{'─'*24}\n"
+                            f"💎 <b>{symbol}</b> — {dir_e}\n"
+                            f"💲 Kirish narxi: <code>${avg_price}</code>\n"
+                            f"{'─'*24}\n"
+                            f"💚 TP1: <code>${tp1}</code>\n"
+                            f"💚 TP2: <code>${tp2}</code>\n"
+                            f"🛑 SL:  <code>${sl}</code>"
+                        )
+                        try:
+                            await self.bot.send_message(
+                                chat_id=gs.notifier_chat_id, text=text, parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+
+                except Exception as e:
+                    logger.error(f"set_tp_sl {symbol}: {e}")
+
+                await asyncio.sleep(0.5)
+
+            logger.info(f"✅ TP/SL qo'yish tugadi. {set_count} ta pozitsiya yangilandi")
+            gs.scanner.add_log(f"🎯 {set_count} ta pozitsiyaga TP/SL qo'yildi")
+
+        except Exception as e:
+            logger.error(f"set_tp_sl_for_existing_positions xato: {e}")
 
     # ── get top signals for display ────────────────────────
     async def get_top_signals(self, top_n: int = 10, min_conf: int = 70) -> List[Dict]:

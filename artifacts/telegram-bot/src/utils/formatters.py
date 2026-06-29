@@ -365,6 +365,7 @@ def format_top_signals(signals: List[Dict]) -> str:
 # SINGLE SIGNAL DETAIL  (second screenshot format)
 # ─────────────────────────────────────────────────────────────
 def format_signal_detail(sig: Dict) -> str:
+    from services.analyzer import estimate_trade_duration
     symbol  = sig["symbol"]
     conf    = sig["confidence"]
     entry   = sig["entry"]
@@ -382,13 +383,15 @@ def format_signal_detail(sig: Dict) -> str:
     trend   = sig.get("trend_dir", "sideways")
     ch24    = sig.get("change_24h", 0)
     reasons = sig.get("reasons", [])
+    tf      = sig.get("timeframe", "1H")
     dir_    = sig["direction"]
     dir_e   = "🟢 XARID (BUY)" if dir_ == "LONG" else "🔴 SOTISH (SELL)"
     macd_e  = "✅ Ijobiy" if macd_h > 0 else "❌ Salbiy"
     vol_e   = "📈 Yuqori" if vol > 1.2 else ("😴 Past" if vol < 0.8 else "➡️ Normal")
-    trend_map = {"up": "➡️ Yon", "down": "⬇️ Pasayish", "sideways": "➡️ Yon"}
+    trend_map = {"up": "⬆️ O'sish", "down": "⬇️ Pasayish", "sideways": "➡️ Yon"}
     trend_str = trend_map.get(trend, "➡️ Yon")
     conf_bar = confidence_bar(conf)
+    duration = estimate_trade_duration(tf, conf)
     lines = [
         f"🌐 <b>{symbol}</b>\n{'─'*28}",
         f"💲 Narx: <b>${fmt_price(entry)}</b>",
@@ -396,6 +399,7 @@ def format_signal_detail(sig: Dict) -> str:
         f"\n🎯 <b>SIGNAL: {dir_e}</b>",
         f"📐 Ishonch: <b>{conf}%</b>",
         f"<code>[{conf_bar}]</code>",
+        f"⏱️ Vaqt oralig'i: <b>{tf}</b>  |  ⌛ Taxminiy muddat: <b>{duration}</b>",
         f"\n📌 <b>SAVDO ZONASI:</b>",
         f"🎯 Kirish: <code>${fmt_price(el)} — ${fmt_price(eh)}</code>",
         f"✅ Take Profit 1: <code>${fmt_price(tp1)}</code>",
@@ -423,18 +427,22 @@ def format_signal_detail(sig: Dict) -> str:
 def format_auto_trade_notify(signal: Dict, leverage: int, size: float,
                               margin: float, tp1: float, tp2: float, sl: float,
                               order_id: str = "") -> str:
+    from services.analyzer import estimate_trade_duration
     symbol  = signal["symbol"]
     dir_    = signal["direction"]
     conf    = signal["confidence"]
     entry   = signal["entry"]
+    tf      = signal.get("timeframe", "1H")
     dir_e   = "🟢 LONG 📈" if dir_ == "LONG" else "🔴 SHORT 📉"
     conf_bar= confidence_bar(conf)
     reasons = signal.get("reasons", [])
+    duration = estimate_trade_duration(tf, conf)
     lines = [
         f"🚨 <b>AI AVTOMATIK SAVDO!</b>",
         f"{'─'*28}",
         f"💎 <b>{symbol}</b> — {dir_e}",
         f"📊 Ishonch: <b>{conf}%</b>  <code>[{conf_bar}]</code>",
+        f"⏱️ Vaqt oralig'i: <b>{tf}</b>  |  ⌛ Taxminiy muddat: <b>{duration}</b>",
         f"{'─'*28}",
         f"💲 <b>Kirish:</b> <code>${fmt_price(entry)}</code>",
         f"⚡ <b>Leverage:</b> <code>{leverage}x</code> (KROSS)",

@@ -69,10 +69,22 @@ async def post_init(application):
     loop = asyncio.get_event_loop()
     loop.create_task(run_trading_background(application.bot))
     loop.create_task(run_github_sync())
+    loop.create_task(_set_tp_sl_on_startup(application.bot))
 
-    # Store engine reference in bot_data for callback handlers
     logger.info("✅ Background tasks started")
     gs.scanner.add_log("✅ Background tasks ishga tushdi")
+
+
+async def _set_tp_sl_on_startup(bot):
+    """Startup da mavjud pozitsiyalarga TP/SL qo'y."""
+    await asyncio.sleep(5)  # Bot to'liq ishga tushguncha kutamiz
+    try:
+        client = BitgetClient()
+        engine = TradingEngine(client, bot=bot)
+        logger.info("🎯 Mavjud pozitsiyalarga TP/SL qo'yilmoqda...")
+        await engine.set_tp_sl_for_existing_positions()
+    except Exception as e:
+        logger.error(f"Startup TP/SL xato: {e}")
 
 
 def main():

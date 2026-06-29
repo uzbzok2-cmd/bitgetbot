@@ -226,6 +226,27 @@ def compute_trend_strength(closes: np.ndarray) -> Tuple[str, float]:
     return "sideways", 0.0
 
 
+def estimate_trade_duration(timeframe: str, confidence: int = 70) -> str:
+    """Signal qancha vaqt ichida natijaga chiqishini taxmin qiladi."""
+    tf_to_hours = {
+        "1M": 0.017, "3M": 0.05, "5M": 0.083, "15M": 0.25, "30M": 0.5,
+        "1H": 1, "2H": 2, "4H": 4, "6H": 6, "12H": 12,
+        "1D": 24, "3D": 72, "1W": 168
+    }
+    base_h = tf_to_hours.get(timeframe.upper(), 1)
+    multiplier = 2 if confidence >= 85 else (3 if confidence >= 75 else 4)
+    hours = base_h * multiplier
+    if hours < 1:
+        mins = int(hours * 60)
+        return f"~{mins} daqiqa"
+    elif hours < 24:
+        return f"~{int(hours)} soat"
+    elif hours < 48:
+        return f"~{hours/24:.1f} kun"
+    else:
+        return f"~{int(hours/24)} kun"
+
+
 def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Optional[Dict]:
     """
     Full multi-indicator analysis. Returns signal dict or None if no clear signal.

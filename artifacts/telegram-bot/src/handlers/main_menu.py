@@ -254,19 +254,32 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
         send_photo_fn = lambda **kw: msg_or_message.reply_photo(**kw)
 
     from services.analyzer import analyze_symbol
+    import logging
+    _logger = logging.getLogger(__name__)
     results = []
     for tf in ["1H", "4H"]:
         try:
-            candles = client.get_futures_candles(symbol, tf, 200)
-            if candles.get("code") == "00000":
-                sig = analyze_symbol(candles.get("data", []), symbol, tf)
+            candles = client.get_futures_candles(symbol, tf, 150)
+            code = candles.get("code")
+            data = candles.get("data", [])
+            _logger.info(f"{symbol} {tf} candles: code={code} count={len(data) if data else 0}")
+            if code == "00000" and data:
+                sig = analyze_symbol(data, symbol, tf)
                 if sig:
-                    results.append((tf, sig, candles.get("data", [])))
-        except Exception:
-            pass
+                    results.append((tf, sig, data))
+                else:
+                    _logger.warning(f"{symbol} {tf}: analyze_symbol None qaytardi")
+            else:
+                _logger.warning(f"{symbol} {tf}: API xato code={code} msg={candles.get('msg')}")
+        except Exception as e:
+            _logger.error(f"{symbol} {tf} candles xato: {e}")
 
     if not results:
-        await send_fn(f"❌ {symbol} uchun ma'lumot olinmadi", parse_mode="HTML")
+        await send_fn(
+            f"❌ <b>{symbol} uchun ma'lumot olinmadi</b>\n"
+            f"<i>Bitget API javob bermadi yoki signal aniqlanmadi. Keyinroq qayta urining.</i>",
+            parse_mode="HTML"
+        )
         return
 
     # Build analysis text
