@@ -49,10 +49,7 @@ async def run_trading_background(bot):
     logger.info("🤖 Trading engine started")
     gs.scanner.add_log("🚀 Trading engine ishga tushdi")
 
-    await asyncio.gather(
-        engine.run_futures_scanner(),
-        engine.run_spot_scanner(),
-    )
+    await engine.run_futures_scanner()
 
 
 async def run_github_sync():
