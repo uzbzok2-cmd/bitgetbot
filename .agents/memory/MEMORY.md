@@ -1,0 +1,3 @@
+- [Bitget API quirks](bitget-api.md) — Bitget v2 API field names differ from docs; use openPriceAvg not averageOpenPrice.
+- [Python bot in pnpm workspace](python-bot-setup.md) — Python 3.11 bot lives in artifacts/telegram-bot/src, workflow name "Telegram Bot".
+- [GitHub sync limitation](github-sync.md) — Git push blocked in main agent bash; bot process does it via github_sync.py every 30 min.
