@@ -16,6 +16,8 @@ from handlers.futures_handlers import (
 from handlers.spot_handlers import (
     show_spot_main, handle_spot_balance, handle_spot_assets,
     handle_spot_open_orders, handle_spot_history_menu, handle_spot_history,
+    handle_spot_signals, handle_spot_statistics, handle_spot_portfolio,
+    handle_spot_portfolio_chart,
 )
 from handlers.trading_status import (
     handle_trading_status, handle_toggle_autotrade,
@@ -29,6 +31,13 @@ from handlers.settings import handle_settings_callback
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data  = query.data or ""
+
+    # ── Auth check ────────────────────────────────────────
+    from services import state as gs
+    user_id = query.from_user.id
+    if user_id not in gs.authenticated_users:
+        await query.answer("🔐 Avval /start bilan kiring!", show_alert=True)
+        return
 
     # ── Main ──────────────────────────────────────────────
     if data == "main_menu":
@@ -81,6 +90,23 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_spot_history(update, context, "30d")
     elif data == "spot_hist_all":
         await handle_spot_history(update, context, "all")
+    elif data == "spot_signals":
+        await handle_spot_signals(update, context)
+    elif data == "spot_stats_1d":
+        await handle_spot_statistics(update, context, "1d")
+    elif data == "spot_stats_7d":
+        await handle_spot_statistics(update, context, "7d")
+    elif data == "spot_stats_30d":
+        await handle_spot_statistics(update, context, "30d")
+    elif data == "spot_portfolio":
+        await handle_spot_portfolio(update, context)
+    elif data == "spot_portfolio_chart":
+        await handle_spot_portfolio_chart(update, context)
+
+    # ── Spot signal trade ────────────────────────────────
+    elif data.startswith("spot_trade_"):
+        symbol = data[len("spot_trade_"):]
+        await _handle_manual_trade_request(update, context, symbol)
 
     # ── Analysis (BTC, ETH, PAXG, XAUT) ──────────────────
     elif data == "btc_analysis":
@@ -109,7 +135,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "sig_hist_all":
         await handle_signal_history_all(update, context)
 
-    # ── Statistics ────────────────────────────────────────
+    # ── Futures Statistics ────────────────────────────────
     elif data == "stats_1d":
         await handle_statistics(update, context, "1d")
     elif data == "stats_7d":
@@ -138,7 +164,7 @@ async def _handle_manual_trade_request(update: Update, context: ContextTypes.DEF
     from services import state as gs
     from services.bitget_client import BitgetClient
     from services.analyzer import safe_float
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    from utils.formatters import fmt_price, _pct_lev
 
     query = update.callback_query
     await query.answer("💰 Savdoga kirish...")
@@ -155,27 +181,22 @@ async def _handle_manual_trade_request(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # Balansni ko'rsatamiz
+    # Balans
     try:
-        client = BitgetClient()
-        acc = client.get_futures_account()
-        available = 0.0
-        equity = 0.0
+        client_inst = BitgetClient()
+        acc = client_inst.get_futures_account()
+        available = 0.0; equity = 0.0
         if acc.get("code") == "00000":
             available = safe_float(acc["data"].get("available", 0))
             equity    = safe_float(acc["data"].get("usdtEquity", 0))
     except Exception:
-        available = 0.0
-        equity = 0.0
+        available = 0.0; equity = 0.0
 
-    from utils.formatters import fmt_price, _pct
     dir_ = signal.get("direction", "LONG")
     entry = signal.get("entry", 0)
     tp1   = signal.get("tp1", 0)
-    tp2   = signal.get("tp2", 0)
     sl    = signal.get("sl", 0)
     conf  = signal.get("confidence", 0)
-
     dir_e = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
 
     text = (
@@ -184,9 +205,8 @@ async def _handle_manual_trade_request(update: Update, context: ContextTypes.DEF
         f"📊 Signal: {dir_e}  •  {conf}%\n"
         f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
         f"{'─'*24}\n"
-        f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})\n"
-        f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>  ({_pct(tp2, entry)})\n"
-        f"🛑 SL:        <code>${fmt_price(sl)}</code>  ({_pct(sl, entry)})\n"
+        f"💚 TP: <code>${fmt_price(tp1)}</code>  ({_pct_lev(tp1, entry)})\n"
+        f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
         f"{'─'*24}\n"
         f"💼 <b>Balansingiz:</b>\n"
         f"├ Kapital:  <code>{equity:.2f} USDT</code>\n"
@@ -196,7 +216,6 @@ async def _handle_manual_trade_request(update: Update, context: ContextTypes.DEF
         f"<i>Raqam yozing (masalan: 5 yoki 10)</i>"
     )
 
-    # Save waiting state
     gs.waiting_trade_input[user_id] = {
         "symbol": symbol,
         "signal": signal,

@@ -1,4 +1,4 @@
-"""Futures section handlers — positions with TP/SL, BTC/ETH analysis."""
+"""Futures section handlers — positions with TP/SL, coin analysis."""
 import time
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -9,7 +9,7 @@ from services.bitget_client import BitgetClient
 from services.analyzer import safe_float
 from utils.formatters import (
     format_futures_balance, format_open_orders,
-    format_tp_sl_orders, format_history, format_top_signals, fmt_price, _pct
+    format_tp_sl_orders, format_history, format_top_signals, fmt_price, _pct, _pct_lev
 )
 
 client = BitgetClient()
@@ -58,14 +58,13 @@ async def handle_futures_balance(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_futures_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show positions with TP/SL levels fetched from plan orders."""
+    """Ochiq pozitsiyalarni TP/SL bilan ko'rsatish."""
     query = update.callback_query
     await query.answer("📊 Yuklanmoqda...")
 
     pos_data  = client.get_futures_positions()
     plan_data = client.get_futures_plan_orders()
 
-    # Build TP/SL map: symbol+holdSide → list of plan orders
     plan_map: dict = {}
     if plan_data.get("code") == "00000":
         plan_list = plan_data.get("data") or []
@@ -77,7 +76,6 @@ async def handle_futures_positions(update: Update, context: ContextTypes.DEFAULT
             key = f"{p.get('symbol','')}-{p.get('holdSide','')}"
             plan_map.setdefault(key, []).append(p)
 
-    # Funding rates
     funding_rates = {}
     if pos_data.get("code") == "00000":
         for pos in pos_data.get("data", []):
@@ -107,7 +105,7 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         return "📭 <b>Hozir ochiq pozitsiyalar yo'q</b>"
 
     lines = [f"📊 <b>OCHIQ POZITSIYALAR</b> ({len(positions)} ta)\n{'─'*28}"]
-    total_unr = 0.0
+    total_unr  = 0.0
     total_fund = 0.0
 
     for pos in positions:
@@ -116,13 +114,14 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         size      = safe_float(pos.get("total", 0))
         avg_price = safe_float(pos.get("openPriceAvg", 0))
         mark_price= safe_float(pos.get("markPrice", avg_price))
-        leverage  = safe_float(pos.get("leverage", 1))
+        leverage  = int(safe_float(pos.get("leverage", 1)))
         margin    = safe_float(pos.get("marginSize", 0))
         unrealized= safe_float(pos.get("unrealizedPL", 0))
         total_fee = safe_float(pos.get("totalFee", 0))
         liq_price = safe_float(pos.get("liquidationPrice", 0))
         pos_value  = size * mark_price
         pnl_pct    = (unrealized / margin * 100) if margin > 0 else 0.0
+        pnl_pct_lev = pnl_pct * leverage if leverage > 1 else pnl_pct
         total_unr += unrealized
 
         fr = funding_rates.get(symbol, 0.0001)
@@ -133,23 +132,18 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         pnl_e   = "🟢" if unrealized > 0 else ("🔴" if unrealized < 0 else "⚪")
         c_time  = pos.get("cTime", "")
         time_str = datetime.fromtimestamp(int(c_time)/1000, tz=timezone.utc).strftime("%m/%d %H:%M") if c_time else "—"
+        mark_pct_str = _pct_lev(mark_price, avg_price, leverage) if avg_price > 0 else ""
 
-        # Current mark vs entry %
-        mark_pct_str = _pct(mark_price, avg_price) if avg_price > 0 else ""
-
-        # Get TP/SL from plan_map
         key = f"{symbol}-{hold_side}"
         plans = plan_map.get(key, [])
         tps, sls = [], []
         for p in plans:
-            pt = p.get("planType", "")
+            pt   = p.get("planType", "")
             trig = safe_float(p.get("triggerPrice", 0))
-            if ("profit" in pt) and trig > 0:
+            if "profit" in pt and trig > 0:
                 tps.append(trig)
-            elif ("loss" in pt) and trig > 0:
+            elif "loss" in pt and trig > 0:
                 sls.append(trig)
-        tps.sort(reverse=(hold_side == "long"))
-        sls.sort()
 
         lines.append(
             f"\n{'─'*28}\n"
@@ -157,25 +151,24 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
             f"📈 <b>Kirish:</b>     <code>${fmt_price(avg_price)}</code>\n"
             f"💹 <b>Mark narx:</b>  <code>${fmt_price(mark_price)}</code>  ({mark_pct_str})\n"
             f"📦 <b>Hajm:</b>       <code>{size} ≈ {pos_value:.2f} USDT</code>\n"
-            f"⚡ <b>Leverage:</b>   <code>{int(leverage)}x</code>  🔒 <code>{margin:.4f} USDT</code>\n"
-            f"{pnl_e} <b>PnL:</b> <code>{unrealized:+.4f} USDT</code> (<code>{pnl_pct:+.2f}%</code>)\n"
+            f"⚡ <b>Leverage:</b>   <code>{leverage}x</code>  🔒 <code>{margin:.4f} USDT</code>\n"
+            f"{pnl_e} <b>PnL:</b> <code>{unrealized:+.4f} USDT</code>  "
+            f"(<code>{pnl_pct:+.2f}%</code>  |  <code>{pnl_pct_lev:+.1f}% ×{leverage}x</code>)\n"
         )
 
-        # TP levels with % from entry
+        # TP levels (only TP1 now)
         if tps:
-            for i, tp in enumerate(tps[:2], 1):
-                tp_pct_str = _pct(tp, avg_price) if avg_price > 0 else ""
-                pct_label = f"80%" if i == 1 else f"20%"
-                lines.append(f"💚 <b>TP{i} ({pct_label}):</b> <code>${fmt_price(tp)}</code>  ({tp_pct_str})")
+            tp = tps[0]
+            tp_pct_str = _pct_lev(tp, avg_price, leverage) if avg_price > 0 else ""
+            lines.append(f"💚 <b>TP:</b> <code>${fmt_price(tp)}</code>  ({tp_pct_str})")
         else:
             lines.append(f"💚 <b>TP:</b> <code>Qo'yilmagan</code>")
 
-        # SL level with % from entry
         if sls:
-            sl_pct_str = _pct(sls[0], avg_price) if avg_price > 0 else ""
-            lines.append(f"🛑 <b>SL:</b>  <code>${fmt_price(sls[0])}</code>  ({sl_pct_str})")
+            sl_pct_str = _pct_lev(sls[0], avg_price, leverage) if avg_price > 0 else ""
+            lines.append(f"🛑 <b>SL:</b> <code>${fmt_price(sls[0])}</code>  ({sl_pct_str})")
         else:
-            lines.append(f"🛑 <b>SL:</b>  <code>Qo'yilmagan</code>")
+            lines.append(f"🛑 <b>SL:</b> <code>Qo'yilmagan</code>")
 
         lines.append(
             f"💸 <b>8H Funding:</b> <code>-{fund_8h:.4f} USDT</code>  "
@@ -266,7 +259,7 @@ async def handle_futures_history(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show top signals 70%+ with charts."""
+    """Top signallar 70%+ — chart bilan."""
     query = update.callback_query
     await query.answer("🔍 Skanerlayapti...")
     loading = (
@@ -283,7 +276,7 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
         signals = await engine.get_top_signals(10, min_conf=70)
         text    = format_top_signals(signals)
     except Exception as e:
-        text = f"❌ <b>Xato:</b>\n<code>{str(e)[:200]}</code>"
+        text    = f"❌ <b>Xato:</b>\n<code>{str(e)[:200]}</code>"
         signals = []
 
     kb = InlineKeyboardMarkup([
@@ -292,7 +285,6 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
-    # Send chart for top signal with "Savdoga Kirish" button
     if signals:
         top_sig = signals[0]
         try:
@@ -301,7 +293,7 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
                 from services.chart_generator import generate_signal_chart
                 from services.analyzer import estimate_trade_duration
                 from services import state as gs
-                tf = top_sig.get("timeframe", "1H")
+                tf  = top_sig.get("timeframe", "1H")
                 dur = estimate_trade_duration(tf, top_sig["confidence"])
                 buf = generate_signal_chart(
                     candles_data=candles.get("data", []),
@@ -309,7 +301,6 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
                     direction=top_sig["direction"],
                     entry=top_sig["entry"],
                     tp1=top_sig["tp1"],
-                    tp2=top_sig["tp2"],
                     sl=top_sig["sl"],
                     confidence=top_sig["confidence"],
                     timeframe=tf,
@@ -324,8 +315,8 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
                 gs.pending_manual_trades[top_sig["symbol"]] = top_sig
                 await query.message.reply_photo(
                     photo=buf,
-                    caption=f"📊 Eng yuqori signal: {top_sig['symbol']} {top_sig['confidence']}%  |  ⌛ {dur}",
+                    caption=f"📊 {top_sig['symbol']} — {top_sig['confidence']}%  |  ⌛ {dur}",
                     reply_markup=chart_kb
                 )
-        except Exception as e:
+        except Exception:
             pass

@@ -68,6 +68,7 @@ async def _send_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "├ 📊 RSI, MACD, EMA, ADX, Supertrend\n"
         "├ 💹 Smart Money Concepts (SMC)\n"
         "├ ⚡ 70%+ → Avtomatik savdo\n"
+        "├ 🕯️ Zocker Signal — 6-7 ketma-ket sham\n"
         "└ 📈 BTC/ETH/PAXG/XAUT tahlili\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⚡ <b>Bot:</b> <code>ACTIVE ✅</code>\n"
@@ -156,20 +157,26 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def _handle_trade_amount_input(update, context, user_id, text):
     """Foydalanuvchi savdo uchun USDT summasini kiritdi."""
-    pending = gs.waiting_trade_input.pop(user_id, None)
+    pending = gs.waiting_trade_input.get(user_id)
     if not pending:
         return
 
     try:
         amount = float(text.replace(",", ".").strip())
         if amount <= 0:
-            raise ValueError("Manfiy")
+            raise ValueError("Manfiy yoki nol")
     except ValueError:
+        # Validatsiya xatosi — holatni SAQLAYMIZ (qayta kiritish uchun)
         await update.message.reply_text(
-            "❌ <b>Noto'g'ri summa.</b>\nMasalan: <code>5</code> yoki <code>10.5</code>",
+            "❌ <b>Noto'g'ri summa.</b>\n"
+            "📝 Masalan: <code>5</code> yoki <code>10.5</code>\n"
+            "💡 Faqat musbat raqam kiriting:",
             parse_mode="HTML"
         )
-        return
+        return  # gs.waiting_trade_input dan o'chirmaymiz
+
+    # Validatsiya muvaffaqiyatli — holatni tozalaymiz
+    gs.waiting_trade_input.pop(user_id, None)
 
     symbol = pending["symbol"]
     signal = pending["signal"]
@@ -181,7 +188,6 @@ async def _handle_trade_amount_input(update, context, user_id, text):
     )
 
     try:
-        import asyncio
         from services.trading_engine import TradingEngine
         engine = TradingEngine(client)
         trade_info, err = await engine.place_manual_trade(symbol, signal, amount)
@@ -194,10 +200,9 @@ async def _handle_trade_amount_input(update, context, user_id, text):
             )
             return
 
-        from utils.formatters import fmt_price, _pct
+        from utils.formatters import fmt_price, _pct_lev
         entry = trade_info["entry"]
         tp1   = trade_info["tp1"]
-        tp2   = trade_info["tp2"]
         sl    = trade_info["sl"]
         lev   = trade_info["leverage"]
         sz    = trade_info["size"]
@@ -212,9 +217,8 @@ async def _handle_trade_amount_input(update, context, user_id, text):
             f"📦 Hajm: <code>{sz:.4f}</code>\n"
             f"💰 Marja: <code>{amount:.2f} USDT</code>\n"
             f"{'─'*24}\n"
-            f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})\n"
-            f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>  ({_pct(tp2, entry)})\n"
-            f"🛑 SL:        <code>${fmt_price(sl)}</code>  ({_pct(sl, entry)})",
+            f"💚 TP: <code>${fmt_price(tp1)}</code>  ({_pct_lev(tp1, entry, lev)})\n"
+            f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry, lev)})",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -312,13 +316,14 @@ async def _show_get_signals_msg(update, context):
         text = format_top_signals(good if good else signals)
     except Exception as e:
         text = f"❌ <b>Xato:</b> <code>{str(e)[:200]}</code>"
+        signals = []
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_signals")],
     ])
     await msg.delete()
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
-    # Top signal uchun chart yuborish
+    # Top signal chart
     try:
         from services.trading_engine import TradingEngine
         engine2 = TradingEngine(client)
@@ -336,7 +341,7 @@ async def _show_get_signals_msg(update, context):
                     symbol=top["symbol"],
                     direction=top["direction"],
                     entry=top["entry"], tp1=top["tp1"],
-                    tp2=top["tp2"], sl=top["sl"],
+                    sl=top["sl"],
                     confidence=top["confidence"],
                     timeframe=tf, duration_label=dur,
                 )
@@ -386,13 +391,28 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
     from services.analyzer import analyze_symbol
     import logging
     _logger = logging.getLogger(__name__)
+
+    # PAXG/XAUT uchun futures'dan oldin spot candles fallback
+    SPOT_FALLBACK_SYMBOLS = {"PAXGUSDT", "XAUTUSDT"}
+
     results = []
     for tf in ["1H", "4H"]:
         try:
+            # Avval futures candles
             candles = client.get_futures_candles(symbol, tf, 150)
             code = candles.get("code")
             data = candles.get("data", [])
-            _logger.info(f"{symbol} {tf} candles: code={code} count={len(data) if data else 0}")
+
+            # Agar futures xato yoki bo'sh bo'lsa — spot candles ishlatamiz
+            if (code != "00000" or not data) and symbol in SPOT_FALLBACK_SYMBOLS:
+                _logger.info(f"{symbol} {tf}: futures xato, spot candles urilyapti...")
+                spot_candles = client.get_spot_candles(symbol, tf, 150)
+                if spot_candles.get("code") == "00000" and spot_candles.get("data"):
+                    candles = spot_candles
+                    code = "00000"
+                    data = candles.get("data", [])
+                    _logger.info(f"{symbol} {tf}: spot candles muvaffaqiyatli ({len(data)} ta)")
+
             if code == "00000" and data:
                 sig = analyze_symbol(data, symbol, tf)
                 if sig:
@@ -400,7 +420,7 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
                 else:
                     _logger.warning(f"{symbol} {tf}: analyze_symbol None qaytardi")
             else:
-                _logger.warning(f"{symbol} {tf}: API xato code={code} msg={candles.get('msg')}")
+                _logger.warning(f"{symbol} {tf}: API xato code={code}")
         except Exception as e:
             _logger.error(f"{symbol} {tf} candles xato: {e}")
 
@@ -411,6 +431,8 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
             parse_mode="HTML"
         )
         return
+
+    from utils.formatters import fmt_price, _pct
 
     lines = [f"📊 <b>{symbol} — TAHLIL</b>"]
     for tf, sig, _ in results:
@@ -427,9 +449,7 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
         reasons = sig.get("reasons", [])
         entry = sig.get("entry", 0)
         tp1   = sig.get("tp1", 0)
-        tp2   = sig.get("tp2", 0)
         sl    = sig.get("sl", 0)
-        from utils.formatters import fmt_price, _pct
 
         lines += [
             f"\n{'─'*28}",
@@ -442,8 +462,7 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
             f"📉 Trend: <code>{trend_map.get(trend,'→')}</code>",
             f"📦 Hajm: <code>{vol:.1f}x</code>",
             f"💲 Kirish: <code>${fmt_price(entry)}</code>",
-            f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})",
-            f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>  ({_pct(tp2, entry)})",
+            f"💚 TP: <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})",
             f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct(sl, entry)})",
         ]
         if reasons:
@@ -464,7 +483,7 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
 
     await send_fn("\n".join(lines), parse_mode="HTML")
 
-    # Send chart for best timeframe (4H preferred)
+    # Chart yuborish
     if send_photo and results:
         best_tf, best_sig, best_candles = results[-1]
         try:
@@ -477,13 +496,11 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
                 direction=best_sig["direction"],
                 entry=best_sig["entry"],
                 tp1=best_sig["tp1"],
-                tp2=best_sig["tp2"],
                 sl=best_sig["sl"],
                 confidence=best_sig["confidence"],
                 timeframe=best_tf,
                 duration_label=dur,
             )
-            # "Savdoga Kirish" tugmasi — faqat 4 ta maxsus crypto uchun
             chart_kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("💰 Savdoga Kirish", callback_data=f"manual_trade_{symbol}")
             ]])
@@ -494,7 +511,7 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
                 reply_markup=chart_kb
             )
         except Exception as e:
-            pass
+            _logger.error(f"Chart error for {symbol}: {e}")
 
 
 # ── InlineKeyboard callbacks ───────────────────────────────
@@ -522,9 +539,10 @@ async def handle_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ADX • ATR • Supertrend\n"
         "Bollinger • Stochastic • SMC\n\n"
         "⚙️ <b>Qoidalar:</b>\n"
-        "├ 70%+ → Avtomatik savdo + rasm\n"
+        "├ 70%+ → Avtomatik savdo (xabarsiz)\n"
         "├ <70% → Faqat tarixda saqlanadi\n"
-        "├ TP1: 80%, TP2: 20%\n"
+        "├ 🕯️ Zocker: 6-7 ketma-ket sham → alert\n"
+        "├ TP: 100%, SL: 100%\n"
         "└ KROSS leverage, maksimal"
     )
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Bosh menyu", callback_data="main_menu")]])

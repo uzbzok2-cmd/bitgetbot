@@ -41,6 +41,20 @@ def _pct(price: float, ref: float) -> str:
     return f"{sign}{pct:.2f}%"
 
 
+def _pct_lev(price: float, ref: float, leverage: int = 0) -> str:
+    """Leverage bilan hisoblangan foiz."""
+    if ref <= 0:
+        return ""
+    pct = (price - ref) / ref * 100
+    sign = "+" if pct >= 0 else ""
+    base = f"{sign}{pct:.2f}%"
+    if leverage > 1:
+        lev_pct = pct * leverage
+        lev_sign = "+" if lev_pct >= 0 else ""
+        return f"{base}  ({lev_sign}{lev_pct:.1f}% ×{leverage}x)"
+    return base
+
+
 # ─────────────────────────────────────────────────────────────
 # FUTURES BALANCE
 # ─────────────────────────────────────────────────────────────
@@ -132,6 +146,8 @@ def format_open_positions(positions_data: dict, funding_rates: dict = None) -> s
         pnl_e   = pnl_emoji(unrealized)
         c_time = pos.get("cTime", "")
         time_str = ts_to_date(c_time, "%m/%d %H:%M") if c_time else "—"
+        lev_int = int(leverage)
+        pnl_pct_lev = pnl_pct * lev_int if lev_int > 1 else pnl_pct
 
         lines.append(
             f"\n{'─'*28}\n"
@@ -139,8 +155,8 @@ def format_open_positions(positions_data: dict, funding_rates: dict = None) -> s
             f"📈 <b>Kirish:</b>  <code>${fmt_price(avg_price)}</code>\n"
             f"💹 <b>Mark narx:</b> <code>${fmt_price(mark_price)}</code>\n"
             f"📦 <b>Hajm:</b>   <code>{size} ({pos_value_usdt:.2f} USDT)</code>\n"
-            f"⚡ <b>Leverage:</b> <code>{int(leverage)}x</code>  🔒 <b>Marja:</b> <code>{margin:.4f} USDT</code>\n"
-            f"{pnl_e} <b>PnL:</b> <code>{unrealized:+.4f} USDT</code> (<code>{pnl_pct:+.2f}%</code>)\n"
+            f"⚡ <b>Leverage:</b> <code>{lev_int}x</code>  🔒 <b>Marja:</b> <code>{margin:.4f} USDT</code>\n"
+            f"{pnl_e} <b>PnL:</b> <code>{unrealized:+.4f} USDT</code> (<code>{pnl_pct:+.2f}%</code>  |  <code>{pnl_pct_lev:+.1f}% ×{lev_int}x</code>)\n"
             f"💸 <b>8H funding:</b> <code>-{funding_8h:.4f} USDT</code>  |  "
             f"🏦 <b>Fee:</b> <code>-{abs(total_fee):.4f} USDT</code>\n"
             f"💣 <b>Lik. narxi:</b> <code>${fmt_price(liq_price)}</code>  🕒 <code>{time_str}</code>"
@@ -314,7 +330,6 @@ def format_top_signals(signals: List[Dict]) -> str:
 
     long_sigs  = [s for s in signals if s["direction"] == "LONG"]
     short_sigs = [s for s in signals if s["direction"] == "SHORT"]
-    neut_sigs  = [s for s in signals if s.get("confidence", 0) < 60]
 
     if long_sigs:
         lines.append("\n🟢 <b>XARID (BUY):</b>")
@@ -325,7 +340,6 @@ def format_top_signals(signals: List[Dict]) -> str:
             el     = sig.get("entry_low",  round(entry * 0.998, 6))
             eh     = sig.get("entry_high", round(entry * 1.002, 6))
             tp1    = sig["tp1"]
-            tp2    = sig["tp2"]
             sl     = sig["sl"]
             rr     = sig.get("risk_reward", 1.0)
             tp1_p  = _pct(tp1, entry)
@@ -333,7 +347,7 @@ def format_top_signals(signals: List[Dict]) -> str:
             lines.append(
                 f"• <b>{symbol}</b> — <b>{conf}% ishonch</b>\n"
                 f"  💰 ${fmt_price(entry)} | Kirish: ${fmt_price(el)}–${fmt_price(eh)}\n"
-                f"  ✅ TP1: ${fmt_price(tp1)} ({tp1_p}) | TP2: ${fmt_price(tp2)}\n"
+                f"  ✅ TP: ${fmt_price(tp1)} ({tp1_p})\n"
                 f"  🔴 SL: ${fmt_price(sl)} ({sl_p}) | ⚖️ R:R 1:{rr}"
             )
 
@@ -346,7 +360,6 @@ def format_top_signals(signals: List[Dict]) -> str:
             el     = sig.get("entry_low",  round(entry * 0.998, 6))
             eh     = sig.get("entry_high", round(entry * 1.002, 6))
             tp1    = sig["tp1"]
-            tp2    = sig["tp2"]
             sl     = sig["sl"]
             rr     = sig.get("risk_reward", 1.0)
             tp1_p  = _pct(tp1, entry)
@@ -354,13 +367,9 @@ def format_top_signals(signals: List[Dict]) -> str:
             lines.append(
                 f"• <b>{symbol}</b> — <b>{conf}% ishonch</b>\n"
                 f"  💰 ${fmt_price(entry)} | Kirish: ${fmt_price(el)}–${fmt_price(eh)}\n"
-                f"  ✅ TP1: ${fmt_price(tp1)} ({tp1_p}) | TP2: ${fmt_price(tp2)}\n"
+                f"  ✅ TP: ${fmt_price(tp1)} ({tp1_p})\n"
                 f"  🔴 SL: ${fmt_price(sl)} ({sl_p}) | ⚖️ R:R 1:{rr}"
             )
-
-    if neut_sigs:
-        names = ", ".join(s["symbol"] for s in neut_sigs[:5])
-        lines.append(f"\n🟡 <b>NEYTRAL:</b> {names}")
 
     lines.append(f"\n{'─'*28}\n🕒 <i>Yangilandi: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>")
     return "\n".join(lines)
@@ -377,7 +386,6 @@ def format_signal_detail(sig: Dict) -> str:
     el      = sig.get("entry_low",  round(entry * 0.998, 8))
     eh      = sig.get("entry_high", round(entry * 1.002, 8))
     tp1     = sig["tp1"]
-    tp2     = sig["tp2"]
     sl      = sig["sl"]
     rsi     = sig.get("rsi", 0)
     macd_h  = sig.get("macd_hist", 0)
@@ -398,7 +406,6 @@ def format_signal_detail(sig: Dict) -> str:
     conf_bar = confidence_bar(conf)
     duration = estimate_trade_duration(tf, conf)
     tp1_p = _pct(tp1, entry)
-    tp2_p = _pct(tp2, entry)
     sl_p  = _pct(sl, entry)
     lines = [
         f"🌐 <b>{symbol}</b>\n{'─'*28}",
@@ -410,8 +417,7 @@ def format_signal_detail(sig: Dict) -> str:
         f"⏱️ Vaqt oralig'i: <b>{tf}</b>  |  ⌛ Taxminiy muddat: <b>{duration}</b>",
         f"\n📌 <b>SAVDO ZONASI:</b>",
         f"🎯 Kirish: <code>${fmt_price(el)} — ${fmt_price(eh)}</code>",
-        f"✅ TP1 (80%): <code>${fmt_price(tp1)}</code>  <b>({tp1_p})</b>",
-        f"✅ TP2 (20%): <code>${fmt_price(tp2)}</code>  <b>({tp2_p})</b>",
+        f"✅ TP: <code>${fmt_price(tp1)}</code>  <b>({tp1_p})</b>",
         f"🔴 Stop Loss: <code>${fmt_price(sl)}</code>  <b>({sl_p})</b>",
         f"⚖️ Risk/Reward: <code>1:{rr}</code>",
         f"\n📊 Trend: {trend_str}",
@@ -433,7 +439,7 @@ def format_signal_detail(sig: Dict) -> str:
 # AUTO-TRADE NOTIFICATION
 # ─────────────────────────────────────────────────────────────
 def format_auto_trade_notify(signal: Dict, leverage: int, size: float,
-                              margin: float, tp1: float, tp2: float, sl: float,
+                              margin: float, tp1: float, sl: float,
                               order_id: str = "") -> str:
     from services.analyzer import estimate_trade_duration
     symbol  = signal["symbol"]
@@ -445,9 +451,8 @@ def format_auto_trade_notify(signal: Dict, leverage: int, size: float,
     conf_bar= confidence_bar(conf)
     reasons = signal.get("reasons", [])
     duration = estimate_trade_duration(tf, conf)
-    tp1_p = _pct(tp1, entry)
-    tp2_p = _pct(tp2, entry)
-    sl_p  = _pct(sl, entry)
+    tp1_p = _pct_lev(tp1, entry, leverage)
+    sl_p  = _pct_lev(sl, entry, leverage)
     lines = [
         f"🚨 <b>AI AVTOMATIK SAVDO!</b>",
         f"{'─'*28}",
@@ -461,8 +466,7 @@ def format_auto_trade_notify(signal: Dict, leverage: int, size: float,
         f"💳 <b>Marja:</b> <code>{margin:.2f} USDT</code>",
         f"🏋️ <b>Pozitsiya:</b> <code>{size * entry:.2f} USDT</code>",
         f"{'─'*28}",
-        f"💚 <b>TP1 (80%):</b> <code>${fmt_price(tp1)}</code>  <b>({tp1_p})</b>",
-        f"💚 <b>TP2 (20%):</b> <code>${fmt_price(tp2)}</code>  <b>({tp2_p})</b>",
+        f"💚 <b>TP:</b> <code>${fmt_price(tp1)}</code>  <b>({tp1_p})</b>",
         f"🛑 <b>SL:</b>  <code>${fmt_price(sl)}</code>  <b>({sl_p})</b>",
         f"{'─'*28}",
     ]
@@ -475,188 +479,197 @@ def format_auto_trade_notify(signal: Dict, leverage: int, size: float,
 
 
 # ─────────────────────────────────────────────────────────────
-# PERMISSION REQUEST (55-60% signal)
+# SPOT ASSETS
+# ─────────────────────────────────────────────────────────────
+def format_spot_assets(account_data: dict, tickers: dict) -> str:
+    if not account_data or account_data.get("code") != "00000":
+        return "❌ <b>Spot ma'lumot olinmadi</b>"
+    assets = account_data.get("data", [])
+    lines = [f"📊 <b>KRIPTO BALANS</b>\n{'─'*28}"]
+    total_usdt = 0.0
+    for asset in assets:
+        coin = asset.get("coin", "")
+        if coin == "USDT":
+            continue
+        available = safe_float(asset.get("available", 0))
+        frozen    = safe_float(asset.get("frozen", 0))
+        total_am  = available + frozen
+        if total_am < 0.000001:
+            continue
+        sym = f"{coin}USDT"
+        ticker = tickers.get(sym, {})
+        price  = safe_float(ticker.get("lastPr", ticker.get("close", 0)))
+        ch24   = safe_float(ticker.get("change24h", ticker.get("priceChangePercent", 0))) * 100
+        usd_val = total_am * price if price > 0 else safe_float(asset.get("usdtAmount", 0))
+        total_usdt += usd_val
+        ch_e = "🟢" if ch24 >= 0 else "🔴"
+        lines.append(
+            f"\n🪙 <b>{coin}</b>\n"
+            f"  📦 Hajm: <code>{total_am:.6f}</code>\n"
+            f"  💲 Narx: <code>${fmt_price(price)}</code>\n"
+            f"  {ch_e} 24h: <code>{ch24:+.2f}%</code>\n"
+            f"  💵 Qiymat: <code>{usd_val:.2f} USDT</code>"
+        )
+    lines += [f"\n{'─'*28}", f"💵 <b>Jami:</b> <code>{total_usdt:.2f} USDT</code>",
+              f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>"]
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────
+# SIGNAL HISTORY
+# ─────────────────────────────────────────────────────────────
+def format_signal_history(signals: list, title: str = "SIGNAL TARIXI") -> str:
+    if not signals:
+        return f"📊 <b>{title}</b>\n\n📭 Signal yo'q\n🕒 <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>"
+    lines = [f"📊 <b>{title}</b> ({len(signals)} ta)\n{'─'*28}"]
+    for sig in signals[:30]:
+        symbol = sig.get("symbol", "")
+        conf   = sig.get("confidence", 0)
+        dir_   = sig.get("direction", "")
+        saved  = sig.get("saved_at_str", "")
+        tf     = sig.get("timeframe", "1H")
+        dir_e  = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
+        outcome = sig.get("outcome")
+        out_e  = "✅ TP" if outcome == "TP" else ("❌ SL" if outcome == "SL" else "⏳")
+        lines.append(f"• <b>{symbol}</b> {dir_e} {conf}% [{tf}] {out_e} <code>{saved}</code>")
+    lines.append(f"\n🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>")
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────
+# STATISTICS
+# ─────────────────────────────────────────────────────────────
+def format_statistics(orders: list, period_label: str, equity: float = 0) -> str:
+    if not orders:
+        return (
+            f"📉 <b>{period_label} STATISTIKA</b>\n{'─'*28}\n"
+            f"📭 Bu davrda yopilgan orderlar yo'q\n"
+            f"💰 Kapital: <code>{equity:.2f} USDT</code>\n"
+            f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>"
+        )
+
+    total_pnl = 0.0; total_fee = 0.0
+    wins = 0; losses = 0; breakeven = 0
+    long_wins = 0; long_losses = 0
+    short_wins = 0; short_losses = 0
+    biggest_win = 0.0; biggest_loss = 0.0
+    symbols_traded = set()
+
+    for o in orders:
+        pnl  = safe_float(o.get("profit", o.get("realizedPL", 0)))
+        fee  = safe_float(o.get("fee", o.get("totalFee", 0)))
+        net  = pnl - abs(fee)
+        side = str(o.get("side", "")).lower()
+        hold = str(o.get("tradeSide", o.get("holdSide", ""))).lower()
+        sym  = o.get("symbol", "")
+        symbols_traded.add(sym)
+        total_pnl += net; total_fee += abs(fee)
+        is_long = "buy" in side or "long" in hold
+        if net > 0:
+            wins += 1
+            if is_long: long_wins += 1
+            else: short_wins += 1
+            biggest_win = max(biggest_win, net)
+        elif net < 0:
+            losses += 1
+            if is_long: long_losses += 1
+            else: short_losses += 1
+            biggest_loss = min(biggest_loss, net)
+        else:
+            breakeven += 1
+
+    total_trades = wins + losses + breakeven
+    wr = wins / total_trades * 100 if total_trades > 0 else 0
+    avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+    pnl_e = pnl_emoji(total_pnl)
+
+    return (
+        f"📉 <b>{period_label} STATISTIKA</b>\n{'═'*28}\n"
+        f"{'─'*28}\n"
+        f"📊 <b>Savdolar soni:</b> <code>{total_trades}</code>\n"
+        f"✅ <b>Win:</b> <code>{wins}</code>  ❌ <b>Loss:</b> <code>{losses}</code>  ⚪ <b>BEQ:</b> <code>{breakeven}</code>\n"
+        f"🏆 <b>Win Rate:</b> <code>{wr:.1f}%</code>\n"
+        f"{'─'*28}\n"
+        f"{pnl_e} <b>Jami PnL:</b> <code>{total_pnl:+.4f} USDT</code>\n"
+        f"📈 <b>O'rtacha PnL:</b> <code>{avg_pnl:+.4f} USDT</code>\n"
+        f"🟢 <b>Eng yaxshi:</b> <code>{biggest_win:+.4f} USDT</code>\n"
+        f"🔴 <b>Eng yomon:</b> <code>{biggest_loss:+.4f} USDT</code>\n"
+        f"🏦 <b>Jami Fee:</b> <code>-{total_fee:.4f} USDT</code>\n"
+        f"{'─'*28}\n"
+        f"🟢 <b>LONG:</b> {long_wins}✅ / {long_losses}❌\n"
+        f"🔴 <b>SHORT:</b> {short_wins}✅ / {short_losses}❌\n"
+        f"🪙 <b>Symbollar:</b> <code>{len(symbols_traded)}</code> ta\n"
+        f"{'─'*28}\n"
+        f"💰 <b>Kapital:</b> <code>{equity:.4f} USDT</code>\n"
+        f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>"
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# SPOT PORTFOLIO ANALYSIS
+# ─────────────────────────────────────────────────────────────
+def format_spot_portfolio(assets_info: list) -> str:
+    if not assets_info:
+        return "📭 <b>Spot portfolio bo'sh</b>"
+    lines = [f"📊 <b>SPOT PORTFOLIO TAHLILI</b>\n{'═'*28}"]
+    total_invested = 0.0
+    total_current  = 0.0
+    for a in assets_info:
+        coin       = a.get("coin", "")
+        amount     = a.get("amount", 0)
+        avg_buy    = a.get("avg_buy_price", 0)
+        cur_price  = a.get("current_price", 0)
+        usdt_val   = a.get("usdt_value", 0)
+        invested   = a.get("invested_usdt", 0)
+        pnl_usdt   = usdt_val - invested
+        pnl_pct    = a.get("pnl_pct", 0)
+        total_invested += invested
+        total_current  += usdt_val
+        pnl_e = "🟢" if pnl_usdt >= 0 else "🔴"
+        sign  = "+" if pnl_pct >= 0 else ""
+        buy_str = f"${fmt_price(avg_buy)}" if avg_buy > 0 else "ma'lumot yo'q"
+        lines.append(
+            f"\n{'─'*28}\n"
+            f"🪙 <b>{coin}</b>\n"
+            f"  📦 Hajm: <code>{amount:.6f}</code>\n"
+            f"  🛒 O'rtacha kirish: <code>{buy_str}</code>\n"
+            f"  💹 Hozirgi narx: <code>${fmt_price(cur_price)}</code>\n"
+            f"  💵 Qiymat: <code>{usdt_val:.2f} USDT</code>\n"
+            f"  {pnl_e} PnL: <code>{pnl_usdt:+.2f} USDT</code>  (<code>{sign}{pnl_pct:.2f}%</code>)"
+        )
+    total_pnl = total_current - total_invested
+    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+    pnl_e = "🟢" if total_pnl >= 0 else "🔴"
+    lines += [
+        f"\n{'═'*28}",
+        f"💰 <b>Jami investitsiya:</b> <code>{total_invested:.2f} USDT</code>",
+        f"💵 <b>Hozirgi qiymat:</b> <code>{total_current:.2f} USDT</code>",
+        f"{pnl_e} <b>Jami PnL:</b> <code>{total_pnl:+.2f} USDT</code>  (<code>{total_pnl_pct:+.2f}%</code>)",
+        f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>",
+    ]
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────
+# PERMISSION REQUEST
 # ─────────────────────────────────────────────────────────────
 def format_permission_request(signal: Dict, leverage: int, order_usdt: float,
-                               tp1: float, tp2: float, sl: float) -> str:
+                               tp1: float, sl: float) -> str:
     symbol  = signal["symbol"]
     dir_    = signal["direction"]
     conf    = signal["confidence"]
     entry   = signal["entry"]
     dir_e   = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
-    est_profit = abs(tp1 - entry) * (order_usdt * leverage / entry)
-    est_loss   = abs(sl - entry) * (order_usdt * leverage / entry)
-    tp1_p = _pct(tp1, entry)
-    sl_p  = _pct(sl, entry)
+    tp1_p   = _pct_lev(tp1, entry, leverage)
+    sl_p    = _pct_lev(sl, entry, leverage)
     return (
-        f"⚠️ <b>RUXSAT SO'RALMOQDA</b>\n"
-        f"{'─'*28}\n"
+        f"⚠️ <b>SAVDO RUXSATI SO'RALMOQDA</b>\n{'─'*28}\n"
         f"💎 <b>{symbol}</b> — {dir_e}\n"
-        f"📐 Ishonch: <b>{conf}%</b>\n"
+        f"📊 Ishonch: <b>{conf}%</b>\n"
         f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
         f"⚡ Leverage: <code>{leverage}x</code>\n"
-        f"💰 Order: <code>{order_usdt:.2f} USDT</code>\n"
+        f"💳 Marja: <code>{order_usdt:.2f} USDT</code>\n"
         f"{'─'*28}\n"
-        f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({tp1_p})\n"
-        f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>\n"
-        f"🛑 SL:  <code>${fmt_price(sl)}</code>  ({sl_p})\n"
-        f"{'─'*28}\n"
-        f"✅ <b>Mumkin foyda:</b> ~<code>{est_profit:.2f} USDT</code>\n"
-        f"❌ <b>Mumkin zarar:</b> ~<code>{est_loss:.2f} USDT</code>\n"
-        f"{'─'*28}\n"
-        f"<b>Savdoga kirasizmi?</b>"
+        f"💚 TP: <code>${fmt_price(tp1)}</code>  ({tp1_p})\n"
+        f"🛑 SL: <code>${fmt_price(sl)}</code>  ({sl_p})"
     )
-
-
-# ─────────────────────────────────────────────────────────────
-# SIGNAL HISTORY LIST (60%+)
-# ─────────────────────────────────────────────────────────────
-def format_signal_history(signals: List[Dict], label: str = "SIGNAL TARIXI") -> str:
-    if not signals:
-        return f"📭 <b>{label} bo'sh</b>"
-
-    # Faqat 60%+ dan yuqorilarni ko'rsatamiz
-    filtered = [s for s in signals if s.get("confidence", 0) >= 60]
-    if not filtered:
-        return f"📭 <b>{label}</b>\n\n60%+ signal yo'q"
-
-    tp_count   = sum(1 for s in filtered if s.get("outcome") == "TP")
-    sl_count   = sum(1 for s in filtered if s.get("outcome") == "SL")
-    total_out  = tp_count + sl_count
-    wr         = (tp_count / total_out * 100) if total_out > 0 else 0
-
-    lines = [f"📜 <b>{label}</b> ({len(filtered)} ta, 60%+)\n{'─'*28}"]
-
-    if total_out > 0:
-        lines.append(
-            f"🏆 <b>Natija:</b> ✅ TP: {tp_count} | ❌ SL: {sl_count} | "
-            f"Win: <b>{wr:.1f}%</b>\n{'─'*28}"
-        )
-
-    for sig in filtered[:30]:
-        symbol  = sig.get("symbol", "")
-        dir_    = sig.get("direction", "")
-        conf    = sig.get("confidence", 0)
-        entry   = sig.get("entry", 0)
-        tp1     = sig.get("tp1", 0)
-        tp2     = sig.get("tp2", 0)
-        sl      = sig.get("sl", 0)
-        saved   = sig.get("saved_at_str", "—")
-        outcome = sig.get("outcome")
-        dir_e   = "🟢" if dir_ == "LONG" else "🔴"
-        out_e   = " ✅TP" if outcome == "TP" else (" ❌SL" if outcome == "SL" else "")
-        tp1_p   = _pct(tp1, entry) if tp1 and entry else ""
-        sl_p    = _pct(sl, entry) if sl and entry else ""
-        lines.append(
-            f"{dir_e} <b>{symbol}</b> {dir_} {conf}%{out_e}\n"
-            f"  💲 ${fmt_price(entry)}  🕒 <code>{saved}</code>\n"
-            f"  ✅TP1: ${fmt_price(tp1)} ({tp1_p})  🔴SL: ${fmt_price(sl)} ({sl_p})"
-        )
-    lines.append(f"\n{'─'*28}\n🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>")
-    return "\n".join(lines)
-
-
-# ─────────────────────────────────────────────────────────────
-# STATISTICS FORMATTER
-# ─────────────────────────────────────────────────────────────
-def format_statistics(orders: list, period_label: str, equity: float = 0) -> str:
-    if not orders:
-        return (
-            f"📊 <b>STATISTIKA — {period_label}</b>\n"
-            f"{'─'*28}\n"
-            f"📭 Bu davr uchun savdo tarixi yo'q"
-        )
-
-    total_pnl = 0.0
-    total_fee = 0.0
-    win_count = 0
-    loss_count = 0
-    even_count = 0
-    symbols_set = set()
-
-    for order in orders:
-        symbol = order.get("symbol", "")
-        pnl    = safe_float(order.get("profit", order.get("realizedPL", 0)))
-        fee    = safe_float(order.get("fee", 0))
-        net    = pnl - abs(fee)
-        total_pnl += net
-        total_fee += abs(fee)
-        symbols_set.add(symbol)
-        if net > 0:
-            win_count += 1
-        elif net < 0:
-            loss_count += 1
-        else:
-            even_count += 1
-
-    total_trades = win_count + loss_count + even_count
-    win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
-    roi = (total_pnl / equity * 100) if equity > 0 else 0
-
-    pnl_e = "🟢" if total_pnl >= 0 else "🔴"
-    roi_e = "📈" if roi >= 0 else "📉"
-
-    lines = [
-        f"📊 <b>STATISTIKA — {period_label}</b>",
-        f"{'═'*28}",
-        f"📈 <b>Savdolar soni:</b> <code>{total_trades}</code>",
-        f"✅ <b>TP (foyda):</b>   <code>{win_count}</code>",
-        f"❌ <b>SL (zarar):</b>   <code>{loss_count}</code>",
-        f"⚪ <b>BEQ:</b>          <code>{even_count}</code>",
-        f"{'─'*28}",
-        f"🏆 <b>Win Rate:</b>     <code>{win_rate:.1f}%</code>",
-        f"{'─'*28}",
-        f"{pnl_e} <b>Jami PnL:</b>     <code>{total_pnl:+.4f} USDT</code>",
-        f"🏦 <b>Jami Fee:</b>     <code>-{total_fee:.4f} USDT</code>",
-    ]
-
-    if equity > 0:
-        lines.append(f"{roi_e} <b>ROI:</b>           <code>{roi:+.2f}%</code>")
-
-    lines += [
-        f"{'─'*28}",
-        f"💎 <b>Savdo qilingan:</b> <code>{len(symbols_set)}</code> ta symbol",
-        f"{'─'*28}",
-        f"🕒 <i>{datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M:%S')} UTC</i>",
-    ]
-    return "\n".join(lines)
-
-
-# ─────────────────────────────────────────────────────────────
-# SPOT ASSETS WITH PRICE
-# ─────────────────────────────────────────────────────────────
-def format_spot_assets(account_data: dict, tickers: dict) -> str:
-    if account_data.get("code") != "00000":
-        return "❌ <b>Ma'lumot olinmadi</b>"
-    assets = account_data.get("data", [])
-    lines  = [f"📊 <b>SPOT KRIPTO BALANSI</b>\n{'─'*28}"]
-    total  = 0.0
-    for asset in assets:
-        coin      = asset.get("coin", "")
-        available = safe_float(asset.get("available", 0))
-        frozen    = safe_float(asset.get("frozen", 0))
-        usd_value = safe_float(asset.get("usdtAmount", 0))
-        if usd_value < 0.1 and available < 0.00001:
-            continue
-        total += usd_value
-        if coin == "USDT":
-            lines.append(f"\n💵 <b>USDT</b>: <code>{available:.4f}</code> ≈ <code>{usd_value:.2f}$</code>")
-            continue
-        symbol  = f"{coin}USDT"
-        price   = 0.0
-        ch24    = 0.0
-        if tickers and tickers.get("code") == "00000":
-            for t in tickers.get("data", []):
-                if t.get("symbol") == symbol:
-                    price = safe_float(t.get("lastPr", 0))
-                    ch24  = safe_float(t.get("change24h", 0)) * 100
-                    break
-        change_str = f" ({ch24:+.2f}%)" if ch24 != 0 else ""
-        price_str  = f" @ ${fmt_price(price)}{change_str}" if price > 0 else ""
-        lines.append(
-            f"\n🪙 <b>{coin}</b>: <code>{available:.6f}</code>{price_str}\n"
-            f"   ≈ <code>{usd_value:.2f} USDT</code>"
-        )
-    lines += [f"\n{'─'*28}", f"💵 <b>Jami:</b> <code>{total:.2f} USDT</code>",
-              f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>"]
-    return "\n".join(lines)

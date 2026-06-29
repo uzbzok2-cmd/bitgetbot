@@ -2,6 +2,7 @@
 Main Telegram Bot entry point.
 - Password auth before any function
 - Background trading engine with notifier
+- Zocker signal scanner (6-7 consecutive candles)
 - GitHub auto-sync every 30 min
 """
 import asyncio
@@ -42,7 +43,6 @@ async def run_trading_background(bot):
     client = BitgetClient()
     engine = TradingEngine(client, bot=bot)
 
-    # Store engine in global for permission approvals
     import builtins
     builtins._trading_engine = engine
 
@@ -50,6 +50,20 @@ async def run_trading_background(bot):
     gs.scanner.add_log("🚀 Trading engine ishga tushdi")
 
     await engine.run_futures_scanner()
+
+
+async def run_zocker_scanner(bot):
+    """Background: Zocker signal — 6-7 ketma-ket shamlar."""
+    await asyncio.sleep(15)  # Trading engine ishga tushguncha kutamiz
+    try:
+        from handlers.zocker_signal import ZockerScanner
+        client = BitgetClient()
+        scanner = ZockerScanner(client, bot=bot)
+        logger.info("🕯️ Zocker scanner started")
+        gs.scanner.add_log("🕯️ Zocker scanner ishga tushdi")
+        await scanner.run()
+    except Exception as e:
+        logger.error(f"Zocker scanner error: {e}")
 
 
 async def run_github_sync():
@@ -68,6 +82,7 @@ async def post_init(application):
     """Launch background tasks after bot starts."""
     loop = asyncio.get_event_loop()
     loop.create_task(run_trading_background(application.bot))
+    loop.create_task(run_zocker_scanner(application.bot))
     loop.create_task(run_github_sync())
     loop.create_task(_set_tp_sl_on_startup(application.bot))
 
@@ -77,7 +92,7 @@ async def post_init(application):
 
 async def _set_tp_sl_on_startup(bot):
     """Startup da mavjud pozitsiyalarga TP/SL qo'y."""
-    await asyncio.sleep(5)  # Bot to'liq ishga tushguncha kutamiz
+    await asyncio.sleep(5)
     try:
         client = BitgetClient()
         engine = TradingEngine(client, bot=bot)
@@ -107,13 +122,11 @@ def main():
         .build()
     )
 
-    # Store engine reference for callback handlers
-    app.bot_data["engine"] = None  # will be set in post_init
+    app.bot_data["engine"] = None
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu",  start_command))
     app.add_handler(CallbackQueryHandler(callback_router))
-    # All text messages go through auth + routing
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     logger.info("✅ Handlers registered, starting polling...")

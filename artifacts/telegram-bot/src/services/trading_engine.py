@@ -1,9 +1,9 @@
 """
 Auto-trading engine:
 - Scans markets every 5 min
-- 70%+ → auto trade + sends signal with chart image
-- <70% → saved to history only (no auto-send, no auto-trade)
-- TP1 = 80% of position, TP2 = 20%
+- 70%+ → auto trade only (signal notifications BLOCKED per user request)
+- <70% → saved to history only
+- TP1 = 100% of position, SL x1
 """
 import asyncio
 import re
@@ -185,10 +185,8 @@ class TradingEngine:
                     gs.signal_history.add(sig)
                     gs.scanner.signals_this_scan += 1
 
-                # 70%+ signallar — signal yuboriladi + avtosavdo
+                # 70%+ — faqat avtosavdo (signal xabarlari BLOK)
                 if conf >= SIGNAL_NOTIFY_THRESHOLD:
-                    await self._send_signal_with_chart(sig, raw)
-
                     if (gs.auto_trade_enabled and
                             open_count < MAX_FUTURES_ORDERS and
                             balance >= MIN_ORDER_USDT and
@@ -205,46 +203,6 @@ class TradingEngine:
         gs.scanner.is_scanning     = False
         gs.scanner.current_symbol  = ""
         gs.scanner.add_log(f"✅ Skan tugadi. 70%+ signallar: {gs.scanner.signals_this_scan}")
-
-    async def _send_signal_with_chart(self, sig: Dict, candles_data: list):
-        if not self.bot or not gs.notifier_chat_id:
-            return
-        from utils.formatters import format_signal_detail
-        from services.analyzer import estimate_trade_duration
-        text = format_signal_detail(sig)
-        tf = sig.get("timeframe", "1H")
-        conf = sig["confidence"]
-        duration = estimate_trade_duration(tf, conf)
-        try:
-            try:
-                from services.chart_generator import generate_signal_chart
-                buf = generate_signal_chart(
-                    candles_data=candles_data,
-                    symbol=sig["symbol"],
-                    direction=sig["direction"],
-                    entry=sig["entry"],
-                    tp1=sig["tp1"],
-                    tp2=sig["tp2"],
-                    sl=sig["sl"],
-                    confidence=sig["confidence"],
-                    timeframe=tf,
-                    duration_label=duration,
-                )
-                await self.bot.send_photo(
-                    chat_id=gs.notifier_chat_id,
-                    photo=buf,
-                    caption=f"📊 {sig['symbol']} — {sig['confidence']}% ishonch  |  ⌛ {duration}"
-                )
-            except Exception as chart_err:
-                logger.warning(f"Chart error: {chart_err}")
-
-            await self.bot.send_message(
-                chat_id=gs.notifier_chat_id,
-                text=text,
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Send signal error: {e}")
 
     async def _place_futures_trade(self, signal: Dict, order_usdt: float, candles_data: list):
         symbol = signal["symbol"]
@@ -264,12 +222,10 @@ class TradingEngine:
         atr_r = atr / entry
         if dir_ == "LONG":
             final_tp1 = round(entry * (1 + atr_r * 1.5 - commission), 8)
-            final_tp2 = round(entry * (1 + atr_r * 3.0 - commission), 8)
             final_sl  = round(entry * (1 - atr_r * 1.5 - commission), 8)
             side = "buy"; hold_side = "long"
         else:
             final_tp1 = round(entry * (1 - atr_r * 1.5 + commission), 8)
-            final_tp2 = round(entry * (1 - atr_r * 3.0 + commission), 8)
             final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
             side = "sell"; hold_side = "short"
 
@@ -312,12 +268,9 @@ class TradingEngine:
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
 
-        # TP1 = 80% of position, TP2 = 20%
-        tp1_size = round(size * 0.8, 4)
-        tp2_size = round(size * 0.2, 4)
+        # TP1 = 100% of position, SL = 100%
         for plan_type, trig, sz in [
-            ("profit_loss", final_tp1, tp1_size),
-            ("profit_loss", final_tp2, tp2_size),
+            ("profit_loss", final_tp1, size),
             ("loss_plan",   final_sl,  size),
         ]:
             try:
@@ -329,8 +282,8 @@ class TradingEngine:
             from utils.formatters import format_auto_trade_notify
             text = format_auto_trade_notify(
                 signal=signal, leverage=max_lev, size=size,
-                margin=order_usdt, tp1=final_tp1, tp2=final_tp2,
-                sl=final_sl, order_id=order_id
+                margin=order_usdt, tp1=final_tp1, sl=final_sl,
+                order_id=order_id
             )
             try:
                 from services.chart_generator import generate_position_chart
@@ -338,7 +291,7 @@ class TradingEngine:
                     candles_data=candles_data,
                     symbol=symbol, direction=dir_,
                     entry=entry, mark_price=entry,
-                    tp_levels=[final_tp1, final_tp2],
+                    tp_levels=[final_tp1],
                     sl_levels=[final_sl],
                     unrealized_pnl=0.0, leverage=max_lev
                 )
@@ -356,7 +309,7 @@ class TradingEngine:
                 logger.error(f"Trade notify error: {e}")
 
     async def place_manual_trade(self, symbol: str, signal: Dict, order_usdt: float):
-        """Manual 'Savdoga kirish' tugmasi — PAXG/XAUT/BTC/ETH uchun."""
+        """Manual 'Savdoga kirish' tugmasi."""
         dir_   = signal["direction"]
         entry  = signal["entry"]
         atr    = signal.get("atr", entry * 0.02)
@@ -373,12 +326,10 @@ class TradingEngine:
         atr_r = atr / entry
         if dir_ == "LONG":
             final_tp1 = round(entry * (1 + atr_r * 1.5 - commission), 8)
-            final_tp2 = round(entry * (1 + atr_r * 3.0 - commission), 8)
             final_sl  = round(entry * (1 - atr_r * 1.5 - commission), 8)
             side = "buy"; hold_side = "long"
         else:
             final_tp1 = round(entry * (1 - atr_r * 1.5 + commission), 8)
-            final_tp2 = round(entry * (1 - atr_r * 3.0 + commission), 8)
             final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
             side = "sell"; hold_side = "short"
 
@@ -407,14 +358,10 @@ class TradingEngine:
 
         order_id = result.get("data", {}).get("orderId", "")
 
-        # TP1=80%, TP2=20%
-        tp1_size = round(size * 0.8, 4)
-        tp2_size = round(size * 0.2, 4)
-        # PAXG/XAUT uchun TP/SL qo'yilmaydi
+        # TP1 = 100% position, SL = 100%
         if symbol not in SKIP_TP_SL_SYMBOLS:
             for plan_type, trig, sz in [
-                ("profit_loss", final_tp1, tp1_size),
-                ("profit_loss", final_tp2, tp2_size),
+                ("profit_loss", final_tp1, size),
                 ("loss_plan",   final_sl,  size),
             ]:
                 try:
@@ -425,7 +372,7 @@ class TradingEngine:
         trade_info = {
             "symbol": symbol, "direction": dir_,
             "leverage": max_lev, "size": size, "margin": order_usdt,
-            "entry": entry, "tp1": final_tp1, "tp2": final_tp2, "sl": final_sl,
+            "entry": entry, "tp1": final_tp1, "sl": final_sl,
             "order_id": order_id
         }
         gs.scanner.active_trades[symbol] = {
@@ -508,21 +455,16 @@ class TradingEngine:
                     price_scale = _price_scale(avg_price)
                     if direction == "LONG":
                         tp1 = round(avg_price * (1 + atr_r * 1.5 - commission), price_scale)
-                        tp2 = round(avg_price * (1 + atr_r * 3.0 - commission), price_scale)
                         sl  = round(avg_price * (1 - atr_r * 1.5 - commission), price_scale)
                     else:
                         tp1 = round(avg_price * (1 - atr_r * 1.5 + commission), price_scale)
-                        tp2 = round(avg_price * (1 - atr_r * 3.0 + commission), price_scale)
                         sl  = round(avg_price * (1 + atr_r * 1.5 + commission), price_scale)
 
-                    # TP1 = 80%, TP2 = 20%
-                    tp1_size = round(size * 0.8, 4)
-                    tp2_size = round(size * 0.2, 4)
+                    # TP1 = 100%, SL = 100%
                     success = True
                     for plan_type, trig, sz in [
-                        ("pos_profit", tp1, tp1_size),
-                        ("pos_profit", tp2, tp2_size),
-                        ("pos_loss",   sl,  size),
+                        ("profit_loss", tp1, size),
+                        ("loss_plan",   sl,  size),
                     ]:
                         ok, _ = _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
                         if ok:
@@ -543,9 +485,8 @@ class TradingEngine:
                             f"💎 <b>{symbol}</b> — {dir_e}\n"
                             f"💲 Kirish narxi: <code>${avg_price}</code>\n"
                             f"{'─'*24}\n"
-                            f"💚 TP1 (80%): <code>${tp1}</code>\n"
-                            f"💚 TP2 (20%): <code>${tp2}</code>\n"
-                            f"🛑 SL:  <code>${sl}</code>"
+                            f"💚 TP: <code>${tp1}</code>\n"
+                            f"🛑 SL: <code>${sl}</code>"
                         )
                         try:
                             await self.bot.send_message(
@@ -559,27 +500,26 @@ class TradingEngine:
 
                 await asyncio.sleep(0.5)
 
-            logger.info(f"✅ TP/SL qo'yish tugadi. {set_count} ta pozitsiya yangilandi")
-            gs.scanner.add_log(f"🎯 {set_count} ta pozitsiyaga TP/SL qo'yildi")
+            logger.info(f"🎯 TP/SL qo'yildi: {set_count} ta pozitsiya")
 
         except Exception as e:
-            logger.error(f"set_tp_sl_for_existing_positions xato: {e}")
+            logger.error(f"set_tp_sl_for_existing: {e}")
 
-    async def get_top_signals(self, top_n: int = 10, min_conf: int = 70) -> List[Dict]:
-        symbols = await self._top_futures_symbols(40)
-        signals = []
-        gs.scanner.add_log(f"🔍 Top signallar ({min_conf}%+)...")
-        for symbol in symbols[:35]:
+    async def get_top_signals(self, n: int = 10, min_conf: int = 55) -> List[Dict]:
+        """Top N signal olish."""
+        symbols = await self._top_futures_symbols(30)
+        results = []
+        for symbol in symbols:
             try:
                 candles = self.client.get_futures_candles(symbol, "1H", 200)
-                if candles.get("code") == "00000":
-                    sig = analyze_symbol(candles.get("data", []), symbol, "1H")
-                    if sig and sig["confidence"] >= min_conf:
-                        signals.append(sig)
-                        if sig["confidence"] >= 60:
-                            gs.signal_history.add(sig)
+                if candles.get("code") != "00000":
+                    continue
+                raw = candles.get("data", [])
+                sig = analyze_symbol(raw, symbol, "1H")
+                if sig and sig["confidence"] >= min_conf:
+                    results.append(sig)
                 await asyncio.sleep(0.2)
             except Exception:
                 pass
-        signals.sort(key=lambda x: x["confidence"], reverse=True)
-        return signals[:top_n]
+        results.sort(key=lambda x: x["confidence"], reverse=True)
+        return results[:n]
