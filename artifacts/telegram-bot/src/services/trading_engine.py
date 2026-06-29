@@ -32,6 +32,21 @@ PRIORITY_SYMBOLS = [
 SKIP_TP_SL_SYMBOLS = {"PAXGUSDT", "XAUTUSDT", "BGBUSDT"}
 
 
+def _price_scale(price: float) -> int:
+    """Narx kattaligiga qarab o'nlik raqamlar sonini aniqlaydi."""
+    if price >= 10000:
+        return 1
+    elif price >= 100:
+        return 2
+    elif price >= 1:
+        return 4
+    elif price >= 0.1:
+        return 5
+    elif price >= 0.01:
+        return 6
+    return 8
+
+
 class TradingEngine:
     def __init__(self, client: BitgetClient, bot=None):
         self.client = client
@@ -400,21 +415,24 @@ class TradingEngine:
 
                     atr_r = atr / avg_price
                     commission = 0.0006 * 2
+                    # Narx precision: Bitget har bir symbol uchun o'z scale'ini talab qiladi
+                    price_scale = _price_scale(avg_price)
                     if direction == "LONG":
-                        tp1 = round(avg_price * (1 + atr_r * 1.5 - commission), 8)
-                        tp2 = round(avg_price * (1 + atr_r * 3.0 - commission), 8)
-                        sl  = round(avg_price * (1 - atr_r * 1.5 - commission), 8)
+                        tp1 = round(avg_price * (1 + atr_r * 1.5 - commission), price_scale)
+                        tp2 = round(avg_price * (1 + atr_r * 3.0 - commission), price_scale)
+                        sl  = round(avg_price * (1 - atr_r * 1.5 - commission), price_scale)
                     else:
-                        tp1 = round(avg_price * (1 - atr_r * 1.5 + commission), 8)
-                        tp2 = round(avg_price * (1 - atr_r * 3.0 + commission), 8)
-                        sl  = round(avg_price * (1 + atr_r * 1.5 + commission), 8)
+                        tp1 = round(avg_price * (1 - atr_r * 1.5 + commission), price_scale)
+                        tp2 = round(avg_price * (1 - atr_r * 3.0 + commission), price_scale)
+                        sl  = round(avg_price * (1 + atr_r * 1.5 + commission), price_scale)
 
                     tp1_size = round(size / 2, 4)
                     success = True
+                    # pos_profit/pos_loss = mavjud pozitsiya uchun TP/SL plan type
                     for plan_type, trig, sz in [
-                        ("profit_loss", tp1, tp1_size),
-                        ("profit_loss", tp2, tp1_size),
-                        ("loss_plan",   sl,  size),
+                        ("pos_profit", tp1, tp1_size),
+                        ("pos_profit", tp2, tp1_size),
+                        ("pos_loss",   sl,  size),
                     ]:
                         r = self.client.place_futures_tp_sl(
                             symbol=symbol, plan_type=plan_type,
