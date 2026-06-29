@@ -441,8 +441,25 @@ class TradingEngine:
                         if r.get("code") == "00000":
                             logger.info(f"✅ {symbol} {plan_type}: {trig}")
                         else:
-                            logger.warning(f"⚠️ {symbol} {plan_type} xato: {r.get('msg')}")
-                            success = False
+                            msg = r.get("msg", "")
+                            # checkScale xatosi: Bitget narx decimallari sonini bildiradi
+                            import re
+                            m = re.search(r"checkScale=(\d+)", msg)
+                            if m:
+                                correct_scale = int(m.group(1))
+                                trig_fixed = round(trig, correct_scale)
+                                r2 = self.client.place_futures_tp_sl(
+                                    symbol=symbol, plan_type=plan_type,
+                                    trigger_price=str(trig_fixed), side=hold_side, size=str(sz)
+                                )
+                                if r2.get("code") == "00000":
+                                    logger.info(f"✅ {symbol} {plan_type} (retry): {trig_fixed}")
+                                else:
+                                    logger.warning(f"⚠️ {symbol} {plan_type} retry xato: {r2.get('msg')}")
+                                    success = False
+                            else:
+                                logger.warning(f"⚠️ {symbol} {plan_type} xato: {msg}")
+                                success = False
 
                     if success:
                         set_count += 1
