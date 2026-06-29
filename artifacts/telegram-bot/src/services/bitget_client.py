@@ -66,10 +66,16 @@ class BitgetClient:
     # ═══════════════════════════════════════════════
 
     def get_futures_account(self, product_type: str = "USDT-FUTURES", margin_coin: str = "USDT") -> dict:
-        return self._get("/api/v2/mix/account/account", {
-            "productType": product_type,
-            "marginCoin": margin_coin
-        })
+        result = self._get("/api/v2/mix/account/accounts", {"productType": product_type})
+        if result.get("code") == "00000":
+            accounts = result.get("data", [])
+            for acc in accounts:
+                if acc.get("marginCoin") == margin_coin:
+                    result["data"] = acc
+                    return result
+            if accounts:
+                result["data"] = accounts[0]
+        return result
 
     def get_futures_accounts_all(self, product_type: str = "USDT-FUTURES") -> dict:
         return self._get("/api/v2/mix/account/accounts", {"productType": product_type})
