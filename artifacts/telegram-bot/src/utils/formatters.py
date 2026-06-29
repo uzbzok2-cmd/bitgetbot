@@ -98,12 +98,18 @@ def format_open_positions(positions_data: dict, tickers: dict = None) -> str:
         symbol = pos.get("symbol", "")
         hold_side = pos.get("holdSide", "")
         size = safe_float(pos.get("total", 0))
-        avg_price = safe_float(pos.get("averageOpenPrice", 0))
+        avg_price = safe_float(pos.get("openPriceAvg", pos.get("averageOpenPrice", 0)))
         mark_price = safe_float(pos.get("markPrice", avg_price))
         leverage = safe_float(pos.get("leverage", 1))
-        margin = safe_float(pos.get("margin", 0))
+        margin = safe_float(pos.get("marginSize", pos.get("margin", 0)))
         unrealized = safe_float(pos.get("unrealizedPL", 0))
-        pnl_pct = safe_float(pos.get("pnlRate", 0)) * 100
+        total_fee = safe_float(pos.get("totalFee", 0))
+        # pnlRate not in response, calculate manually
+        if avg_price > 0 and margin > 0:
+            raw_pct = (unrealized / margin) * 100
+        else:
+            raw_pct = 0.0
+        pnl_pct = raw_pct
 
         # Calculate funding (8h rate estimate)
         funding_rate = 0.0001  # ~0.01% per 8h
@@ -139,6 +145,8 @@ def format_open_orders(orders_data: dict, plan_orders: dict = None) -> str:
         order_list = orders_data.get("data", {})
         if isinstance(order_list, dict):
             order_list = order_list.get("entrustedList", [])
+        if not isinstance(order_list, list):
+            order_list = []
         for order in order_list:
             symbol = order.get("symbol", "")
             side = order.get("side", "")
