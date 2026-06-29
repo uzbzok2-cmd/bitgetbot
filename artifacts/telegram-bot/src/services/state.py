@@ -1,0 +1,67 @@
+"""
+Global bot state — tracks live activity, signals history, auth, auto-trade toggle.
+"""
+import time
+from datetime import datetime, timezone
+from typing import List, Dict, Set, Optional
+
+# ── Auth ──────────────────────────────────────────────────────────────
+authenticated_users: Set[int] = set()
+
+# ── Auto-trade toggle ─────────────────────────────────────────────────
+auto_trade_enabled: bool = True
+
+# ── Live scanner activity ─────────────────────────────────────────────
+class ScannerState:
+    def __init__(self):
+        self.is_scanning: bool = False
+        self.current_symbol: str = ""
+        self.symbols_checked: int = 0
+        self.total_symbols: int = 0
+        self.last_scan_time: Optional[float] = None
+        self.next_scan_time: Optional[float] = None
+        self.signals_this_scan: int = 0
+        self.log_lines: List[str] = []
+        self.active_trades: Dict = {}   # symbol -> trade info
+
+    def add_log(self, msg: str):
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        self.log_lines.append(f"[{ts}] {msg}")
+        if len(self.log_lines) > 50:
+            self.log_lines = self.log_lines[-50:]
+
+    def get_recent_logs(self, n: int = 15) -> List[str]:
+        return self.log_lines[-n:]
+
+scanner = ScannerState()
+
+# ── Signal history ────────────────────────────────────────────────────
+class SignalHistory:
+    def __init__(self, max_size: int = 200):
+        self.signals: List[Dict] = []
+        self.max_size = max_size
+
+    def add(self, signal: Dict):
+        entry = dict(signal)
+        entry["saved_at"] = int(time.time())
+        entry["saved_at_str"] = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
+        self.signals.insert(0, entry)
+        if len(self.signals) > self.max_size:
+            self.signals = self.signals[:self.max_size]
+
+    def get_today(self) -> List[Dict]:
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).timestamp()
+        return [s for s in self.signals if s.get("saved_at", 0) >= today_start]
+
+    def get_all(self) -> List[Dict]:
+        return self.signals
+
+signal_history = SignalHistory()
+
+# ── Permission-pending signals (55-60%) ──────────────────────────────
+pending_permission_signals: Dict[str, Dict] = {}
+
+# ── Notifier chat_id (set on first /start after auth) ────────────────
+notifier_chat_id: Optional[int] = None

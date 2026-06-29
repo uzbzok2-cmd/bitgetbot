@@ -1,7 +1,6 @@
 """Futures section handlers."""
-import asyncio
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 import sys, os
@@ -10,7 +9,7 @@ from services.bitget_client import BitgetClient
 from services.analyzer import safe_float
 from utils.formatters import (
     format_futures_balance, format_open_positions, format_open_orders,
-    format_tp_sl_orders, format_history, format_top_signals, ts_to_date
+    format_tp_sl_orders, format_history, format_top_signals
 )
 
 client = BitgetClient()
@@ -19,94 +18,104 @@ client = BitgetClient()
 def futures_main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💼 Balans", callback_data="fut_balance"),
-         InlineKeyboardButton("📊 Ochiq Pozitsiyalar", callback_data="fut_positions")],
+         InlineKeyboardButton("📊 Pozitsiyalar", callback_data="fut_positions")],
         [InlineKeyboardButton("📋 Faol Orderlar", callback_data="fut_open_orders"),
-         InlineKeyboardButton("🎯 TP/SL Orderlar", callback_data="fut_tpsl")],
+         InlineKeyboardButton("🎯 TP/SL", callback_data="fut_tpsl")],
         [InlineKeyboardButton("📜 Tarix", callback_data="fut_history"),
          InlineKeyboardButton("🏆 Top Signallar", callback_data="fut_signals")],
-        [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_refresh"),
-         InlineKeyboardButton("🏠 Bosh menyu", callback_data="main_menu")],
+        [InlineKeyboardButton("🔄 Yangilash", callback_data="section_futures"),
+         InlineKeyboardButton("🏠 Bosh", callback_data="main_menu")],
     ])
 
 
-def history_keyboard(section="fut"):
+def history_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Bugungi", callback_data=f"{section}_hist_today"),
-         InlineKeyboardButton("📆 7 Kunlik", callback_data=f"{section}_hist_7d"),
-         InlineKeyboardButton("🗓️ 30 Kunlik", callback_data=f"{section}_hist_30d")],
-        [InlineKeyboardButton("📋 Hamma vaqt", callback_data=f"{section}_hist_all"),
-         InlineKeyboardButton("🔙 Orqaga", callback_data=f"fut_main" if section == "fut" else "spot_main")],
+        [InlineKeyboardButton("📅 Bugun", callback_data="fut_hist_today"),
+         InlineKeyboardButton("📆 7 Kun", callback_data="fut_hist_7d"),
+         InlineKeyboardButton("🗓️ 30 Kun", callback_data="fut_hist_30d")],
+        [InlineKeyboardButton("📋 Hammasi", callback_data="fut_hist_all"),
+         InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")],
     ])
 
 
 async def show_futures_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     text = (
         "📈 <b>FYUCHERS BO'LIMI</b>\n"
-        "═══════════════════════════\n"
-        "⚡ <b>USDT-M Perpetual Futures</b>\n"
-        "🔄 <b>Marja rejimi:</b> KROSS\n"
-        "💡 Quyidagi bo'limlardan birini tanlang:\n\n"
-        "💼 <b>Balans</b> — Erkin va ishlatilgan balans\n"
-        "📊 <b>Ochiq Pozitsiyalar</b> — Faol tradelar PnL\n"
-        "📋 <b>Faol Orderlar</b> — Kutayotgan orderlar\n"
-        "🎯 <b>TP/SL</b> — Take Profit & Stop Loss\n"
-        "📜 <b>Tarix</b> — Bugun/7kun/30kun tarix\n"
-        "🏆 <b>Top Signallar</b> — AI signallari TOP-10"
+        "══════════════════════════\n"
+        "⚡ USDT-M Perpetual | KROSS Marja\n\n"
+        "💼 <b>Balans</b> — Erkin/ishlatilgan\n"
+        "📊 <b>Pozitsiyalar</b> — PnL + 8H funding\n"
+        "📋 <b>Faol Orderlar</b> — Kutayotganlar\n"
+        "🎯 <b>TP/SL</b> — Trigger orderlar\n"
+        "📜 <b>Tarix</b> — Bugun/7/30 kun\n"
+        "🏆 <b>Top Signallar</b> — AI TOP-10"
     )
-    kb = futures_main_keyboard()
-    if query:
-        await query.answer()
-        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
-    else:
-        await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    await query.edit_message_text(text, reply_markup=futures_main_keyboard(), parse_mode="HTML")
 
 
 async def handle_futures_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("💼 Balans yuklanmoqda...")
+    await query.answer("💼 Yuklanmoqda...")
     data = client.get_futures_account()
     text = format_futures_balance(data)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_balance"),
-         InlineKeyboardButton("🔙 Orqaga", callback_data="fut_main")]
+         InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")]
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def handle_futures_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("📊 Pozitsiyalar yuklanmoqda...")
-    data = client.get_futures_positions()
-    text = format_open_positions(data)
+    await query.answer("📊 Yuklanmoqda...")
+
+    pos_data = client.get_futures_positions()
+
+    # Get funding rates for open positions
+    funding_rates = {}
+    if pos_data.get("code") == "00000":
+        for pos in pos_data.get("data", []):
+            if safe_float(pos.get("total", 0)) > 0:
+                symbol = pos.get("symbol", "")
+                try:
+                    fr_data = client.get_funding_rate(symbol)
+                    if fr_data.get("code") == "00000":
+                        fr = safe_float(fr_data.get("data", {}).get("fundingRate", 0.0001))
+                        funding_rates[symbol] = fr
+                except Exception:
+                    funding_rates[symbol] = 0.0001
+
+    text = format_open_positions(pos_data, funding_rates)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_positions"),
-         InlineKeyboardButton("🔙 Orqaga", callback_data="fut_main")]
+         InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")]
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def handle_futures_open_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("📋 Orderlar yuklanmoqda...")
+    await query.answer("📋 Yuklanmoqda...")
     orders = client.get_futures_open_orders()
-    plan_orders = client.get_futures_plan_orders()
-    text = format_open_orders(orders, plan_orders)
+    plan   = client.get_futures_plan_orders()
+    text   = format_open_orders(orders, plan)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_open_orders"),
-         InlineKeyboardButton("🔙 Orqaga", callback_data="fut_main")]
+         InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")]
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def handle_futures_tpsl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("🎯 TP/SL yuklanmoqda...")
-    plan_orders = client.get_futures_plan_orders()
-    text = format_tp_sl_orders(plan_orders)
+    await query.answer("🎯 Yuklanmoqda...")
+    plan = client.get_futures_plan_orders()
+    text = format_tp_sl_orders(plan)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_tpsl"),
-         InlineKeyboardButton("🔙 Orqaga", callback_data="fut_main")]
+         InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")]
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
@@ -114,52 +123,38 @@ async def handle_futures_tpsl(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_futures_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    text = (
-        "📜 <b>FYUCHERS TARIX</b>\n"
-        "═══════════════════════════\n"
-        "Qaysi davr uchun tarix ko'rmoqchisiz?"
-    )
-    await query.edit_message_text(text, reply_markup=history_keyboard("fut"), parse_mode="HTML")
+    text = "📜 <b>FYUCHERS TARIX</b>\n══════════════════\nQaysi davr?"
+    await query.edit_message_text(text, reply_markup=history_keyboard(), parse_mode="HTML")
 
 
 async def handle_futures_history(update: Update, context: ContextTypes.DEFAULT_TYPE, period: str = "today"):
     query = update.callback_query
-    await query.answer("📜 Tarix yuklanmoqda...")
-
+    await query.answer("📜 Yuklanmoqda...")
     now_ms = int(time.time() * 1000)
+    labels = {"today": "BUGUNGI TARIX", "7d": "7 KUNLIK TARIX", "30d": "30 KUNLIK TARIX", "all": "BARCHA TARIX"}
+    label = labels.get(period, "TARIX")
     if period == "today":
         start_ms = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0).timestamp() * 1000)
-        label = "BUGUNGI TARIX"
     elif period == "7d":
         start_ms = now_ms - 7 * 24 * 3600 * 1000
-        label = "7 KUNLIK TARIX"
     elif period == "30d":
         start_ms = now_ms - 30 * 24 * 3600 * 1000
-        label = "30 KUNLIK TARIX"
     else:
         start_ms = 0
-        label = "BARCHA VAQT TARIXI"
-
-    params = {"productType": "USDT-FUTURES", "limit": "100"}
-    if start_ms:
-        params["startTime"] = str(start_ms)
-        params["endTime"] = str(now_ms)
 
     data = client.get_futures_order_history(
         start_time=str(start_ms) if start_ms else "",
-        end_time=str(now_ms),
-        limit=100
+        end_time=str(now_ms), limit=100
     )
     orders = []
     if data.get("code") == "00000":
-        orders = data.get("data", {}).get("entrustedList", data.get("data", []))
-        if not isinstance(orders, list):
-            orders = []
+        d = data.get("data", {})
+        orders = d.get("entrustedList", d.get("orderList", [])) if isinstance(d, dict) else (d or [])
 
     text = format_history(orders, label, "futures")
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data=f"fut_hist_{period}"),
-         InlineKeyboardButton("🔙 Tarix Menyu", callback_data="fut_history"),
+         InlineKeyboardButton("🔙 Tarix", callback_data="fut_history"),
          InlineKeyboardButton("🏠 Bosh", callback_data="main_menu")]
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
@@ -167,28 +162,23 @@ async def handle_futures_history(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("🔍 Signallar skanerlanmoqda...")
-
-    # Show loading message
-    loading_text = (
+    await query.answer("🔍 Skanerlayapti...")
+    loading = (
         "🔍 <b>AI SIGNALLAR SKANERLANMOQDA...</b>\n\n"
-        "⏳ Barcha kripto bozorlar tahlil qilinmoqda\n"
-        "📊 RSI, MACD, EMA, ADX, Supertrend...\n"
-        "🧠 Smart Money Concepts tekshirilmoqda\n\n"
-        "<i>Bu 10-20 soniya davom etadi...</i>"
+        "📊 BTC, ETH, BNB, SOL, XRP...\n"
+        "🧠 RSI, MACD, EMA, ADX, SMC...\n\n"
+        "<i>10–20 soniya kuting...</i>"
     )
-    await query.edit_message_text(loading_text, parse_mode="HTML")
-
+    await query.edit_message_text(loading, parse_mode="HTML")
     try:
         from services.trading_engine import TradingEngine
         engine = TradingEngine(client)
         signals = await engine.get_top_signals(10)
         text = format_top_signals(signals)
     except Exception as e:
-        text = f"❌ <b>Signal olishda xato:</b>\n<code>{str(e)[:200]}</code>"
-
+        text = f"❌ <b>Xato:</b>\n<code>{str(e)[:200]}</code>"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data="fut_signals"),
-         InlineKeyboardButton("🔙 Orqaga", callback_data="fut_main")]
+         InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")]
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")

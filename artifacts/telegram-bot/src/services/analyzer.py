@@ -1,9 +1,5 @@
 import numpy as np
-import pandas as pd
 from typing import Optional, Tuple, List, Dict
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def safe_float(val, default=0.0):
@@ -61,6 +57,15 @@ def compute_ema(closes: np.ndarray, period: int) -> float:
     return e
 
 
+def compute_ema_series(closes: np.ndarray, period: int) -> np.ndarray:
+    k = 2.0 / (period + 1)
+    result = np.zeros(len(closes))
+    result[0] = closes[0]
+    for i in range(1, len(closes)):
+        result[i] = closes[i] * k + result[i - 1] * (1 - k)
+    return result
+
+
 def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> float:
     if len(highs) < period + 1:
         return (highs[-1] - lows[-1]) if len(highs) > 0 else 0.0
@@ -70,8 +75,7 @@ def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period:
         hc = abs(highs[i] - closes[i - 1])
         lc = abs(lows[i] - closes[i - 1])
         tr_list.append(max(hl, hc, lc))
-    atr = np.mean(tr_list[-period:])
-    return atr
+    return float(np.mean(tr_list[-period:]))
 
 
 def compute_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> float:
@@ -87,19 +91,19 @@ def compute_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period:
         hc = abs(highs[i] - closes[i - 1])
         lc = abs(lows[i] - closes[i - 1])
         tr_list.append(max(hl, hc, lc))
-    atr_smooth = np.mean(tr_list[:period])
-    pdm_smooth = np.mean(plus_dm_list[:period])
-    mdm_smooth = np.mean(minus_dm_list[:period])
+    atr_s = float(np.mean(tr_list[:period]))
+    pdm_s = float(np.mean(plus_dm_list[:period]))
+    mdm_s = float(np.mean(minus_dm_list[:period]))
     dx_list = []
     for i in range(period, len(tr_list)):
-        atr_smooth = atr_smooth - atr_smooth / period + tr_list[i]
-        pdm_smooth = pdm_smooth - pdm_smooth / period + plus_dm_list[i]
-        mdm_smooth = mdm_smooth - mdm_smooth / period + minus_dm_list[i]
-        pdi = 100 * pdm_smooth / atr_smooth if atr_smooth else 0
-        mdi = 100 * mdm_smooth / atr_smooth if atr_smooth else 0
+        atr_s = atr_s - atr_s / period + tr_list[i]
+        pdm_s = pdm_s - pdm_s / period + plus_dm_list[i]
+        mdm_s = mdm_s - mdm_s / period + minus_dm_list[i]
+        pdi = 100 * pdm_s / atr_s if atr_s else 0
+        mdi = 100 * mdm_s / atr_s if atr_s else 0
         dx = 100 * abs(pdi - mdi) / (pdi + mdi) if (pdi + mdi) else 0
         dx_list.append(dx)
-    return np.mean(dx_list[-period:]) if dx_list else 20.0
+    return float(np.mean(dx_list[-period:])) if dx_list else 20.0
 
 
 def compute_supertrend(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
@@ -111,7 +115,7 @@ def compute_supertrend(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
     basic_upper = hl2 + multiplier * atr
     basic_lower = hl2 - multiplier * atr
     trend = 1 if closes[-1] > basic_lower else -1
-    return basic_lower if trend == 1 else basic_upper, trend
+    return (basic_lower if trend == 1 else basic_upper), trend
 
 
 def compute_bollinger(closes: np.ndarray, period: int = 20, std_dev: float = 2.0) -> Tuple[float, float, float]:
@@ -119,248 +123,309 @@ def compute_bollinger(closes: np.ndarray, period: int = 20, std_dev: float = 2.0
         c = closes[-1]
         return c, c, c
     recent = closes[-period:]
-    mid = np.mean(recent)
-    std = np.std(recent)
+    mid = float(np.mean(recent))
+    std = float(np.std(recent))
     return mid + std_dev * std, mid, mid - std_dev * std
-
-
-def compute_volume_trend(volumes: np.ndarray, period: int = 20) -> float:
-    if len(volumes) < period:
-        return 1.0
-    avg_vol = np.mean(volumes[-period:])
-    recent_vol = volumes[-1]
-    return recent_vol / avg_vol if avg_vol > 0 else 1.0
 
 
 def compute_stochastic(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> Tuple[float, float]:
     if len(closes) < period:
         return 50.0, 50.0
-    recent_high = np.max(highs[-period:])
-    recent_low = np.min(lows[-period:])
+    recent_high = float(np.max(highs[-period:]))
+    recent_low = float(np.min(lows[-period:]))
     if recent_high == recent_low:
         return 50.0, 50.0
     k = 100 * (closes[-1] - recent_low) / (recent_high - recent_low)
+    d = k
     if len(closes) >= period + 2:
-        k2 = 100 * (closes[-2] - np.min(lows[-period - 1:-1])) / (np.max(highs[-period - 1:-1]) - np.min(lows[-period - 1:-1]) + 1e-9)
-        k3 = 100 * (closes[-3] - np.min(lows[-period - 2:-2])) / (np.max(highs[-period - 2:-2]) - np.min(lows[-period - 2:-2]) + 1e-9)
+        k2 = 100 * (closes[-2] - float(np.min(lows[-period - 1:-1]))) / (float(np.max(highs[-period - 1:-1])) - float(np.min(lows[-period - 1:-1])) + 1e-9)
+        k3 = 100 * (closes[-3] - float(np.min(lows[-period - 2:-2]))) / (float(np.max(highs[-period - 2:-2])) - float(np.min(lows[-period - 2:-2])) + 1e-9)
         d = (k + k2 + k3) / 3
-    else:
-        d = k
     return k, d
 
 
-def detect_smc_signals(closes: np.ndarray, highs: np.ndarray, lows: np.ndarray) -> Dict:
+def compute_volume_trend(volumes: np.ndarray, period: int = 20) -> float:
+    if len(volumes) < period:
+        return 1.0
+    avg_vol = float(np.mean(volumes[-period:]))
+    return volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+
+
+def compute_support_resistance(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> Tuple[float, float]:
     if len(closes) < 20:
-        return {"bos": False, "choch": False, "ob_bullish": False, "ob_bearish": False}
+        return closes[-1] * 0.95, closes[-1] * 1.05
+    recent_lows = lows[-20:]
+    recent_highs = highs[-20:]
+    support = float(np.percentile(recent_lows, 10))
+    resistance = float(np.percentile(recent_highs, 90))
+    return support, resistance
 
-    last_20_high = np.max(highs[-20:])
-    last_20_low = np.min(lows[-20:])
-    prev_high = np.max(highs[-40:-20]) if len(highs) >= 40 else highs[0]
-    prev_low = np.min(lows[-40:-20]) if len(lows) >= 40 else lows[0]
 
+def detect_smc(closes: np.ndarray, highs: np.ndarray, lows: np.ndarray) -> Dict:
+    if len(closes) < 20:
+        return {"bos_bullish": False, "bos_bearish": False, "choch": False, "ob_bullish": False, "ob_bearish": False}
+    last_20_high = float(np.max(highs[-20:]))
+    last_20_low = float(np.min(lows[-20:]))
+    prev_high = float(np.max(highs[-40:-20])) if len(highs) >= 40 else float(highs[0])
+    prev_low = float(np.min(lows[-40:-20])) if len(lows) >= 40 else float(lows[0])
     bos_bullish = closes[-1] > last_20_high and closes[-5] < last_20_high
     bos_bearish = closes[-1] < last_20_low and closes[-5] > last_20_low
-    choch = (closes[-1] > prev_high and closes[-3] < prev_high) or \
-            (closes[-1] < prev_low and closes[-3] > prev_low)
-
+    choch = (closes[-1] > prev_high and closes[-3] < prev_high) or (closes[-1] < prev_low and closes[-3] > prev_low)
+    diffs = np.abs(np.diff(closes[-10:]))
+    avg_body = float(np.mean(diffs)) if len(diffs) > 0 else 0
     recent_body = abs(closes[-3] - closes[-4])
-    ob_bullish = closes[-3] < closes[-4] and recent_body > np.mean(np.abs(np.diff(closes[-10:]))) * 1.5
-    ob_bearish = closes[-3] > closes[-4] and recent_body > np.mean(np.abs(np.diff(closes[-10:]))) * 1.5
-
+    ob_bullish = closes[-3] < closes[-4] and recent_body > avg_body * 1.5
+    ob_bearish = closes[-3] > closes[-4] and recent_body > avg_body * 1.5
     return {
-        "bos": bos_bullish or bos_bearish,
         "bos_bullish": bos_bullish,
         "bos_bearish": bos_bearish,
         "choch": choch,
         "ob_bullish": ob_bullish,
-        "ob_bearish": ob_bearish
+        "ob_bearish": ob_bearish,
     }
+
+
+def detect_price_action(closes: np.ndarray, highs: np.ndarray, lows: np.ndarray) -> Dict:
+    """Detect key price action patterns."""
+    if len(closes) < 5:
+        return {"pattern": "none", "bullish": False, "bearish": False}
+    # Engulfing
+    bullish_engulf = (closes[-1] > closes[-2] and
+                      closes[-1] > highs[-2] and
+                      closes[-2] < lows[-3] if len(closes) > 3 else False)
+    bearish_engulf = (closes[-1] < closes[-2] and
+                      closes[-1] < lows[-2] and
+                      closes[-2] > highs[-3] if len(closes) > 3 else False)
+    # Hammer/Shooting star
+    body = abs(closes[-1] - closes[-2])
+    upper_wick = highs[-1] - max(closes[-1], closes[-2])
+    lower_wick = min(closes[-1], closes[-2]) - lows[-1]
+    hammer = lower_wick > body * 2 and upper_wick < body * 0.5
+    shooting_star = upper_wick > body * 2 and lower_wick < body * 0.5
+    return {
+        "bullish_engulf": bullish_engulf,
+        "bearish_engulf": bearish_engulf,
+        "hammer": hammer,
+        "shooting_star": shooting_star,
+    }
+
+
+def compute_trend_strength(closes: np.ndarray) -> Tuple[str, float]:
+    """Determine trend direction and strength using price position."""
+    if len(closes) < 50:
+        return "sideways", 0.5
+    ema20 = compute_ema(closes, 20)
+    ema50 = compute_ema(closes, 50)
+    price = closes[-1]
+    if price > ema20 > ema50:
+        pct = (price - ema50) / ema50 * 100
+        return "up", min(pct, 10.0)
+    elif price < ema20 < ema50:
+        pct = (ema50 - price) / ema50 * 100
+        return "down", min(pct, 10.0)
+    return "sideways", 0.0
 
 
 def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Optional[Dict]:
     """
-    Full multi-indicator analysis returning signal with confidence score.
-    Returns dict with signal, confidence, entry, tp1, tp2, sl, and analysis details.
+    Full multi-indicator analysis. Returns signal dict or None if no clear signal.
+    Confidence 55%+ triggers signal (55-60% needs permission, 60%+ auto-trade).
     """
     if not candles_data or len(candles_data) < 50:
         return None
-
     try:
-        opens = np.array([safe_float(c[1]) for c in candles_data])
-        highs = np.array([safe_float(c[2]) for c in candles_data])
-        lows = np.array([safe_float(c[3]) for c in candles_data])
+        opens  = np.array([safe_float(c[1]) for c in candles_data])
+        highs  = np.array([safe_float(c[2]) for c in candles_data])
+        lows   = np.array([safe_float(c[3]) for c in candles_data])
         closes = np.array([safe_float(c[4]) for c in candles_data])
-        volumes = np.array([safe_float(c[5]) for c in candles_data])
+        volumes= np.array([safe_float(c[5]) for c in candles_data])
     except Exception:
         return None
 
-    if len(closes) < 50:
+    if len(closes) < 50 or closes[-1] == 0:
         return None
 
     rsi = compute_rsi(closes, 14)
-    macd_line, signal_line, histogram = compute_macd(closes)
-    ema_9 = compute_ema(closes, 9)
-    ema_21 = compute_ema(closes, 21)
-    ema_50 = compute_ema(closes, 50)
-    ema_200 = compute_ema(closes, 200) if len(closes) >= 200 else ema_50
-    atr = compute_atr(highs, lows, closes, 14)
-    adx = compute_adx(highs, lows, closes, 14)
+    macd_line, sig_line, histogram = compute_macd(closes)
+    ema9  = compute_ema(closes, 9)
+    ema21 = compute_ema(closes, 21)
+    ema50 = compute_ema(closes, 50)
+    ema200= compute_ema(closes, 200) if len(closes) >= 200 else ema50
+    atr   = compute_atr(highs, lows, closes, 14)
+    adx   = compute_adx(highs, lows, closes, 14)
     st_level, st_trend = compute_supertrend(highs, lows, closes, 10, 3.0)
     bb_upper, bb_mid, bb_lower = compute_bollinger(closes, 20, 2.0)
     vol_ratio = compute_volume_trend(volumes, 20)
     stoch_k, stoch_d = compute_stochastic(highs, lows, closes, 14)
-    smc = detect_smc_signals(closes, highs, lows)
+    smc = detect_smc(closes, highs, lows)
+    pa  = detect_price_action(closes, highs, lows)
+    trend_dir, trend_strength = compute_trend_strength(closes)
+    support, resistance = compute_support_resistance(highs, lows, closes)
 
-    current_price = closes[-1]
+    current = closes[-1]
+    prev    = closes[-2] if len(closes) > 1 else current
+    change_pct = (current - prev) / prev * 100 if prev > 0 else 0.0
+
     score_long = 0
     score_short = 0
     reasons_long = []
     reasons_short = []
+    max_score = 100
 
-    # RSI
-    if rsi < 35:
-        score_long += 15
-        reasons_long.append(f"RSI={rsi:.1f} oversold")
-    elif rsi < 45:
-        score_long += 8
-    elif rsi > 65:
-        score_short += 15
-        reasons_short.append(f"RSI={rsi:.1f} overbought")
+    # RSI (max 18)
+    if rsi < 30:
+        score_long += 18; reasons_long.append(f"RSI={rsi:.0f} past haddan oshdi")
+    elif rsi < 40:
+        score_long += 12; reasons_long.append(f"RSI={rsi:.0f} past zona")
+    elif rsi < 50:
+        score_long += 6
+    elif rsi > 70:
+        score_short += 18; reasons_short.append(f"RSI={rsi:.0f} yuqori haddan oshdi")
+    elif rsi > 60:
+        score_short += 12; reasons_short.append(f"RSI={rsi:.0f} yuqori zona")
     elif rsi > 55:
-        score_short += 8
+        score_short += 6
 
-    # MACD
-    if histogram > 0 and macd_line > signal_line:
-        score_long += 12
-        reasons_long.append("MACD bullish cross")
-    elif histogram < 0 and macd_line < signal_line:
-        score_short += 12
-        reasons_short.append("MACD bearish cross")
-    if histogram > 0 and histogram > abs(histogram) * 0.1:
-        score_long += 5
+    # MACD (max 15)
+    if histogram > 0 and macd_line > sig_line:
+        score_long += 15; reasons_long.append("MACD o'sish kesishdi")
+    elif histogram < 0 and macd_line < sig_line:
+        score_short += 15; reasons_short.append("MACD pasayish kesishdi")
+    elif histogram > 0:
+        score_long += 6
     elif histogram < 0:
-        score_short += 5
+        score_short += 6
 
-    # EMA trend
-    if ema_9 > ema_21 > ema_50:
-        score_long += 12
-        reasons_long.append("EMA bullish alignment")
-    elif ema_9 < ema_21 < ema_50:
-        score_short += 12
-        reasons_short.append("EMA bearish alignment")
+    # EMA alignment (max 14)
+    if ema9 > ema21 > ema50:
+        score_long += 14; reasons_long.append("EMA o'sish joylashishi")
+    elif ema9 < ema21 < ema50:
+        score_short += 14; reasons_short.append("EMA pasayish joylashishi")
+    elif ema9 > ema21:
+        score_long += 6
+    elif ema9 < ema21:
+        score_short += 6
 
-    if current_price > ema_200:
+    # Price vs EMA200 (max 8)
+    if current > ema200:
         score_long += 8
     else:
         score_short += 8
 
-    # ADX - trend strength
-    if adx > 25:
-        if score_long > score_short:
-            score_long += 8
-            reasons_long.append(f"ADX={adx:.1f} strong trend")
+    # ADX trend strength (max 8)
+    if adx > 20:
+        if score_long >= score_short:
+            score_long += 8; reasons_long.append(f"ADX={adx:.0f} trend kuchli")
         else:
-            score_short += 8
-            reasons_short.append(f"ADX={adx:.1f} strong trend")
+            score_short += 8; reasons_short.append(f"ADX={adx:.0f} trend kuchli")
 
-    # Supertrend
+    # Supertrend (max 14)
     if st_trend == 1:
-        score_long += 15
-        reasons_long.append("Supertrend bullish")
+        score_long += 14; reasons_long.append("Supertrend o'sish")
     else:
-        score_short += 15
-        reasons_short.append("Supertrend bearish")
+        score_short += 14; reasons_short.append("Supertrend pasayish")
 
-    # Bollinger Bands
-    if current_price < bb_lower:
-        score_long += 10
-        reasons_long.append("Price below BB lower")
-    elif current_price > bb_upper:
-        score_short += 10
-        reasons_short.append("Price above BB upper")
-    elif current_price < bb_mid:
+    # Bollinger Bands (max 10)
+    if current < bb_lower:
+        score_long += 10; reasons_long.append("Narx BB pastidan chiqdi")
+    elif current > bb_upper:
+        score_short += 10; reasons_short.append("Narx BB yuqorisidan chiqdi")
+    elif current < bb_mid:
         score_long += 4
     else:
         score_short += 4
 
-    # Volume
-    if vol_ratio > 1.5:
-        if score_long > score_short:
-            score_long += 8
-            reasons_long.append(f"High volume {vol_ratio:.1f}x")
+    # Volume (max 8)
+    if vol_ratio > 1.3:
+        bonus = min(8, int(vol_ratio * 3))
+        if score_long >= score_short:
+            score_long += bonus; reasons_long.append(f"Hajm yuqori {vol_ratio:.1f}x")
         else:
-            score_short += 8
-            reasons_short.append(f"High volume {vol_ratio:.1f}x")
+            score_short += bonus; reasons_short.append(f"Hajm yuqori {vol_ratio:.1f}x")
 
-    # Stochastic
-    if stoch_k < 20 and stoch_k > stoch_d:
-        score_long += 8
-        reasons_long.append(f"Stoch oversold cross")
-    elif stoch_k > 80 and stoch_k < stoch_d:
-        score_short += 8
-        reasons_short.append(f"Stoch overbought cross")
+    # Stochastic (max 8)
+    if stoch_k < 25 and stoch_k > stoch_d:
+        score_long += 8; reasons_long.append("Stoch pastdan kesishdi")
+    elif stoch_k > 75 and stoch_k < stoch_d:
+        score_short += 8; reasons_short.append("Stoch yuqoridan kesishdi")
 
-    # SMC
+    # SMC (max 10)
     if smc["bos_bullish"] or smc["ob_bullish"]:
-        score_long += 10
-        reasons_long.append("SMC bullish structure")
+        score_long += 10; reasons_long.append("SMC o'sish strukturasi")
     if smc["bos_bearish"] or smc["ob_bearish"]:
-        score_short += 10
-        reasons_short.append("SMC bearish structure")
-    if smc["choch"]:
-        bonus = 5
-        if score_long > score_short:
-            score_long += bonus
-        else:
-            score_short += bonus
+        score_short += 10; reasons_short.append("SMC pasayish strukturasi")
 
-    total_max = 111
-    long_confidence = min(100, int(score_long / total_max * 100))
-    short_confidence = min(100, int(score_short / total_max * 100))
+    # Price Action (max 8)
+    if pa["bullish_engulf"] or pa["hammer"]:
+        score_long += 8; reasons_long.append("PA: o'sish pattern")
+    if pa["bearish_engulf"] or pa["shooting_star"]:
+        score_short += 8; reasons_short.append("PA: pasayish pattern")
 
-    if long_confidence > short_confidence and long_confidence >= 55:
-        direction = "LONG"
-        confidence = long_confidence
-        reasons = reasons_long
-    elif short_confidence > long_confidence and short_confidence >= 55:
-        direction = "SHORT"
-        confidence = short_confidence
-        reasons = reasons_short
+    # Trend direction (max 7)
+    if trend_dir == "up":
+        score_long += 7
+    elif trend_dir == "down":
+        score_short += 7
+
+    # Score to confidence
+    long_conf  = min(95, int(score_long / max_score * 100))
+    short_conf = min(95, int(score_short / max_score * 100))
+
+    if long_conf > short_conf and long_conf >= 55:
+        direction   = "LONG"
+        confidence  = long_conf
+        reasons     = reasons_long
+    elif short_conf > long_conf and short_conf >= 55:
+        direction   = "SHORT"
+        confidence  = short_conf
+        reasons     = reasons_short
     else:
         return None
 
     # ATR-based TP/SL
-    atr_multiplier = 1.5
+    atr_mult = 1.5
     if direction == "LONG":
-        sl = round(current_price - atr * atr_multiplier, 6)
-        tp1 = round(current_price + atr * atr_multiplier, 6)
-        tp2 = round(current_price + atr * atr_multiplier * 2, 6)
+        sl  = round(current - atr * atr_mult, 8)
+        tp1 = round(current + atr * atr_mult, 8)
+        tp2 = round(current + atr * atr_mult * 2, 8)
+        entry_low  = round(current * 0.998, 8)
+        entry_high = round(current * 1.002, 8)
     else:
-        sl = round(current_price + atr * atr_multiplier, 6)
-        tp1 = round(current_price - atr * atr_multiplier, 6)
-        tp2 = round(current_price - atr * atr_multiplier * 2, 6)
+        sl  = round(current + atr * atr_mult, 8)
+        tp1 = round(current - atr * atr_mult, 8)
+        tp2 = round(current - atr * atr_mult * 2, 8)
+        entry_low  = round(current * 0.998, 8)
+        entry_high = round(current * 1.002, 8)
 
-    risk_reward = abs(tp1 - current_price) / abs(sl - current_price) if abs(sl - current_price) > 0 else 1.0
+    rr = abs(tp1 - current) / abs(sl - current) if abs(sl - current) > 0 else 1.0
 
     return {
-        "symbol": symbol,
-        "direction": direction,
-        "confidence": confidence,
-        "entry": round(current_price, 6),
-        "tp1": tp1,
-        "tp2": tp2,
-        "sl": sl,
-        "atr": round(atr, 6),
-        "rsi": round(rsi, 2),
-        "macd": round(macd_line, 6),
-        "adx": round(adx, 2),
-        "ema_9": round(ema_9, 6),
-        "ema_21": round(ema_21, 6),
-        "ema_50": round(ema_50, 6),
-        "supertrend": round(st_level, 6),
-        "supertrend_dir": "↑" if st_trend == 1 else "↓",
+        "symbol":       symbol,
+        "direction":    direction,
+        "confidence":   confidence,
+        "entry":        round(current, 8),
+        "entry_low":    entry_low,
+        "entry_high":   entry_high,
+        "tp1":          tp1,
+        "tp2":          tp2,
+        "sl":           sl,
+        "atr":          round(atr, 8),
+        "rsi":          round(rsi, 1),
+        "macd":         round(macd_line, 8),
+        "macd_hist":    round(histogram, 8),
+        "adx":          round(adx, 1),
+        "ema9":         round(ema9, 6),
+        "ema21":        round(ema21, 6),
+        "ema50":        round(ema50, 6),
+        "supertrend":   round(st_level, 6),
+        "supertrend_dir": "o'sish ↑" if st_trend == 1 else "pasayish ↓",
         "volume_ratio": round(vol_ratio, 2),
-        "risk_reward": round(risk_reward, 2),
-        "reasons": reasons,
-        "timeframe": timeframe
+        "stoch_k":      round(stoch_k, 1),
+        "risk_reward":  round(rr, 1),
+        "support":      round(support, 8),
+        "resistance":   round(resistance, 8),
+        "trend_dir":    trend_dir,
+        "change_24h":   round(change_pct, 2),
+        "reasons":      reasons,
+        "timeframe":    timeframe,
     }
