@@ -22,6 +22,8 @@ from handlers.trading_status import (
     handle_approve_signal, handle_reject_signal,
     handle_signal_history, handle_signal_history_all,
 )
+from handlers.statistics import handle_statistics
+from handlers.settings import handle_settings_callback
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,11 +82,20 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "spot_hist_all":
         await handle_spot_history(update, context, "all")
 
-    # ── BTC / ETH analysis ────────────────────────────────
+    # ── Analysis (BTC, ETH, PAXG, XAUT) ──────────────────
     elif data == "btc_analysis":
         await do_coin_analysis_callback(update, context, "BTCUSDT")
     elif data == "eth_analysis":
         await do_coin_analysis_callback(update, context, "ETHUSDT")
+    elif data == "paxg_analysis":
+        await do_coin_analysis_callback(update, context, "PAXGUSDT")
+    elif data == "xaut_analysis":
+        await do_coin_analysis_callback(update, context, "XAUTUSDT")
+
+    # ── Manual trade ("Savdoga Kirish" tugmasi) ───────────
+    elif data.startswith("manual_trade_"):
+        symbol = data[len("manual_trade_"):]
+        await _handle_manual_trade_request(update, context, symbol)
 
     # ── Trading status ────────────────────────────────────
     elif data == "trading_status":
@@ -98,6 +109,20 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "sig_hist_all":
         await handle_signal_history_all(update, context)
 
+    # ── Statistics ────────────────────────────────────────
+    elif data == "stats_1d":
+        await handle_statistics(update, context, "1d")
+    elif data == "stats_7d":
+        await handle_statistics(update, context, "7d")
+    elif data == "stats_30d":
+        await handle_statistics(update, context, "30d")
+
+    # ── Settings ──────────────────────────────────────────
+    elif data == "settings":
+        await handle_settings_callback(update, context)
+    elif data.startswith("set_bal_pct_") or data == "settings_save" or data == "settings_noop":
+        await handle_settings_callback(update, context)
+
     # ── Permission approve/reject ─────────────────────────
     elif data.startswith("approve_"):
         await handle_approve_signal(update, context, data[len("approve_"):])
@@ -106,3 +131,76 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         await query.answer(f"⚠️ Noma'lum: {data[:30]}")
+
+
+async def _handle_manual_trade_request(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
+    """Foydalanuvchi 'Savdoga Kirish' tugmasini bosdi."""
+    from services import state as gs
+    from services.bitget_client import BitgetClient
+    from services.analyzer import safe_float
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+    query = update.callback_query
+    await query.answer("💰 Savdoga kirish...")
+
+    user_id = query.from_user.id
+
+    # Signal mavjudmi?
+    signal = gs.pending_manual_trades.get(symbol)
+    if not signal:
+        await query.message.reply_text(
+            f"⚠️ <b>{symbol} uchun signal topilmadi.</b>\n"
+            f"Avval tahlil qiling.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Balansni ko'rsatamiz
+    try:
+        client = BitgetClient()
+        acc = client.get_futures_account()
+        available = 0.0
+        equity = 0.0
+        if acc.get("code") == "00000":
+            available = safe_float(acc["data"].get("available", 0))
+            equity    = safe_float(acc["data"].get("usdtEquity", 0))
+    except Exception:
+        available = 0.0
+        equity = 0.0
+
+    from utils.formatters import fmt_price, _pct
+    dir_ = signal.get("direction", "LONG")
+    entry = signal.get("entry", 0)
+    tp1   = signal.get("tp1", 0)
+    tp2   = signal.get("tp2", 0)
+    sl    = signal.get("sl", 0)
+    conf  = signal.get("confidence", 0)
+
+    dir_e = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
+
+    text = (
+        f"💰 <b>SAVDOGA KIRISH — {symbol}</b>\n"
+        f"{'─'*24}\n"
+        f"📊 Signal: {dir_e}  •  {conf}%\n"
+        f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
+        f"{'─'*24}\n"
+        f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})\n"
+        f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>  ({_pct(tp2, entry)})\n"
+        f"🛑 SL:        <code>${fmt_price(sl)}</code>  ({_pct(sl, entry)})\n"
+        f"{'─'*24}\n"
+        f"💼 <b>Balansingiz:</b>\n"
+        f"├ Kapital:  <code>{equity:.2f} USDT</code>\n"
+        f"└ Erkin:    <code>{available:.2f} USDT</code>\n"
+        f"{'─'*24}\n"
+        f"📝 <b>Qancha USDT bilan kirishni xohlaysiz?</b>\n"
+        f"<i>Raqam yozing (masalan: 5 yoki 10)</i>"
+    )
+
+    # Save waiting state
+    gs.waiting_trade_input[user_id] = {
+        "symbol": symbol,
+        "signal": signal,
+        "direction": dir_,
+    }
+
+    await query.message.reply_text(text, parse_mode="HTML")

@@ -19,14 +19,23 @@ PASSWORD_TEXT = (
     "🔑 <b>Parolni kiriting:</b>"
 )
 
+ANALYSIS_SYMBOLS_LIST = [
+    ("📊 BTC",  "BTCUSDT"),
+    ("📊 ETH",  "ETHUSDT"),
+    ("💎 PAXG", "PAXGUSDT"),
+    ("🥇 XAUT", "XAUTUSDT"),
+]
+
 
 def bottom_reply_keyboard():
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("📈 FYUCHERS"), KeyboardButton("🪙 SPOT")],
             [KeyboardButton("🤖 Bot Holati"), KeyboardButton("📜 Signal Tarixi")],
-            [KeyboardButton("📊 BTC Tahlil"),  KeyboardButton("📊 ETH Tahlil")],
+            [KeyboardButton("📊 BTC"), KeyboardButton("📊 ETH"),
+             KeyboardButton("💎 PAXG"), KeyboardButton("🥇 XAUT")],
             [KeyboardButton("🔍 Hozir Signal Ol")],
+            [KeyboardButton("📉 Statistika"), KeyboardButton("⚙️ Sozlamalar")],
         ],
         resize_keyboard=True,
     )
@@ -39,14 +48,17 @@ def main_inline_keyboard():
         [InlineKeyboardButton("🤖 Jonli Holat", callback_data="trading_status"),
          InlineKeyboardButton("📜 Signal Tarixi", callback_data="sig_hist_today")],
         [InlineKeyboardButton("🔍 Signal Ol (70%+)", callback_data="fut_signals"),
+         InlineKeyboardButton("📉 Statistika", callback_data="stats_1d")],
+        [InlineKeyboardButton("📊 BTC", callback_data="btc_analysis"),
+         InlineKeyboardButton("📊 ETH", callback_data="eth_analysis"),
+         InlineKeyboardButton("💎 PAXG", callback_data="paxg_analysis"),
+         InlineKeyboardButton("🥇 XAUT", callback_data="xaut_analysis")],
+        [InlineKeyboardButton("⚙️ Sozlamalar", callback_data="settings"),
          InlineKeyboardButton("ℹ️ Haqida", callback_data="about")],
-        [InlineKeyboardButton("📊 BTC Tahlil", callback_data="btc_analysis"),
-         InlineKeyboardButton("📊 ETH Tahlil", callback_data="eth_analysis")],
     ])
 
 
 async def _send_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome + bottom keyboard + inline menu."""
     gs.notifier_chat_id = update.effective_chat.id
     text = (
         "🤖 <b>BITGET AI CRYPTO BOT v2.0</b>\n"
@@ -56,7 +68,7 @@ async def _send_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "├ 📊 RSI, MACD, EMA, ADX, Supertrend\n"
         "├ 💹 Smart Money Concepts (SMC)\n"
         "├ ⚡ 70%+ → Avtomatik savdo\n"
-        "└ 📈 BTC/ETH yo'nalish tahlili\n\n"
+        "└ 📈 BTC/ETH/PAXG/XAUT tahlili\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⚡ <b>Bot:</b> <code>ACTIVE ✅</code>\n"
         f"🕒 <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</code>\n\n"
@@ -83,11 +95,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text — password check + bottom keyboard routing."""
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # ── Password gate ─────────────────────────────────────
+    # ── Password gate ──────────────────────────────────────
     if user_id not in gs.authenticated_users:
         if text == BOT_PASSWORD:
             gs.authenticated_users.add(user_id)
@@ -104,8 +115,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         return
 
-    # Authenticated — update chat id
     gs.notifier_chat_id = update.effective_chat.id
+
+    # ── "Savdoga kirish" — foydalanuvchi USDT summasini kirityapti ──
+    if user_id in gs.waiting_trade_input:
+        await _handle_trade_amount_input(update, context, user_id, text)
+        return
 
     # ── Bottom keyboard routing ───────────────────────────
     if text == "📈 FYUCHERS":
@@ -116,16 +131,100 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _show_bot_status_msg(update, context)
     elif text == "📜 Signal Tarixi":
         await _show_signal_hist_msg(update, context)
-    elif text == "📊 BTC Tahlil":
+    elif text == "📊 BTC":
         await _show_coin_analysis_msg(update, context, "BTCUSDT")
-    elif text == "📊 ETH Tahlil":
+    elif text == "📊 ETH":
         await _show_coin_analysis_msg(update, context, "ETHUSDT")
+    elif text == "💎 PAXG":
+        await _show_coin_analysis_msg(update, context, "PAXGUSDT")
+    elif text == "🥇 XAUT":
+        await _show_coin_analysis_msg(update, context, "XAUTUSDT")
     elif text == "🔍 Hozir Signal Ol":
         await _show_get_signals_msg(update, context)
+    elif text == "📉 Statistika":
+        from handlers.statistics import handle_stats_from_text
+        await handle_stats_from_text(update, context)
+    elif text == "⚙️ Sozlamalar":
+        from handlers.settings import handle_settings_text
+        await handle_settings_text(update, context)
     else:
         await update.message.reply_text(
             "❓ Pastdagi tugmalardan foydalaning.",
             reply_markup=bottom_reply_keyboard()
+        )
+
+
+async def _handle_trade_amount_input(update, context, user_id, text):
+    """Foydalanuvchi savdo uchun USDT summasini kiritdi."""
+    pending = gs.waiting_trade_input.pop(user_id, None)
+    if not pending:
+        return
+
+    try:
+        amount = float(text.replace(",", ".").strip())
+        if amount <= 0:
+            raise ValueError("Manfiy")
+    except ValueError:
+        await update.message.reply_text(
+            "❌ <b>Noto'g'ri summa.</b>\nMasalan: <code>5</code> yoki <code>10.5</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    symbol = pending["symbol"]
+    signal = pending["signal"]
+
+    msg = await update.message.reply_text(
+        f"⏳ <b>{symbol} uchun savdo ochilmoqda...</b>\n"
+        f"💵 Summa: <code>{amount:.2f} USDT</code>",
+        parse_mode="HTML"
+    )
+
+    try:
+        import asyncio
+        from services.trading_engine import TradingEngine
+        engine = TradingEngine(client)
+        trade_info, err = await engine.place_manual_trade(symbol, signal, amount)
+
+        if err:
+            await msg.delete()
+            await update.message.reply_text(
+                f"❌ <b>Savdo ochilmadi</b>\n<code>{err}</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        from utils.formatters import fmt_price, _pct
+        entry = trade_info["entry"]
+        tp1   = trade_info["tp1"]
+        tp2   = trade_info["tp2"]
+        sl    = trade_info["sl"]
+        lev   = trade_info["leverage"]
+        sz    = trade_info["size"]
+
+        await msg.delete()
+        await update.message.reply_text(
+            f"✅ <b>SAVDO OCHILDI!</b>\n"
+            f"{'─'*24}\n"
+            f"💎 <b>{symbol}</b> — {'🟢 LONG' if signal['direction']=='LONG' else '🔴 SHORT'}\n"
+            f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
+            f"⚡ Leverage: <code>{lev}x</code> (KROSS)\n"
+            f"📦 Hajm: <code>{sz:.4f}</code>\n"
+            f"💰 Marja: <code>{amount:.2f} USDT</code>\n"
+            f"{'─'*24}\n"
+            f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})\n"
+            f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>  ({_pct(tp2, entry)})\n"
+            f"🛑 SL:        <code>${fmt_price(sl)}</code>  ({_pct(sl, entry)})",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await update.message.reply_text(
+            f"❌ <b>Xato:</b> <code>{str(e)[:200]}</code>",
+            parse_mode="HTML"
         )
 
 
@@ -149,7 +248,6 @@ async def _show_spot_msg(update, context):
 
 
 async def _show_bot_status_msg(update, context):
-    import time
     sc = gs.scanner
     auto_icon  = "🟢 YOQILGAN" if gs.auto_trade_enabled else "🔴 O'CHIRILGAN"
     scan_icon  = "🔄 Skanerlayapti..." if sc.is_scanning else "⏸️ Kutmoqda"
@@ -173,6 +271,7 @@ async def _show_bot_status_msg(update, context):
     text = (
         f"🤖 <b>BOT JONLI HOLATI</b>\n{'═'*28}\n"
         f"⚡ <b>Avtosavdo (70%+):</b> {auto_icon}\n"
+        f"📊 <b>Balans foizi:</b> <code>{gs.trade_balance_pct:.1f}%</code>\n"
         f"🔄 <b>Skaner:</b> {scan_icon}\n"
         f"🕒 <b>Oxirgi skan:</b> <code>{last_scan}</code>"
         f"{trades_text}{log_text}"
@@ -180,7 +279,8 @@ async def _show_bot_status_msg(update, context):
     toggle = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled else "🟢 Avtosavdoni Yoqish"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(toggle, callback_data="toggle_autotrade")],
-        [InlineKeyboardButton("🔄 Yangilash", callback_data="trading_status")],
+        [InlineKeyboardButton("⚙️ Sozlamalar", callback_data="settings"),
+         InlineKeyboardButton("🔄 Yangilash", callback_data="trading_status")],
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
@@ -188,7 +288,7 @@ async def _show_bot_status_msg(update, context):
 async def _show_signal_hist_msg(update, context):
     from utils.formatters import format_signal_history
     signals = gs.signal_history.get_today()
-    text = format_signal_history(signals, "BUGUNGI SIGNAL TARIXI (55%+)")
+    text = format_signal_history(signals, "BUGUNGI SIGNAL TARIXI (60%+)")
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Barcha signallar", callback_data="sig_hist_all"),
          InlineKeyboardButton("🔄 Yangilash", callback_data="sig_hist_today")],
@@ -197,7 +297,6 @@ async def _show_signal_hist_msg(update, context):
 
 
 async def _show_get_signals_msg(update, context):
-    """Manually trigger signal scan and return results."""
     msg = await update.message.reply_text(
         "🔍 <b>Signallar skanerlanmoqda...</b>\n"
         "📊 BTC, ETH, BNB, SOL, XRP...\n"
@@ -209,7 +308,6 @@ async def _show_get_signals_msg(update, context):
         from utils.formatters import format_top_signals
         engine = TradingEngine(client)
         signals = await engine.get_top_signals(10)
-        # Show only 70%+ in the "best signals" display
         good = [s for s in signals if s["confidence"] >= 70]
         text = format_top_signals(good if good else signals)
     except Exception as e:
@@ -220,14 +318,47 @@ async def _show_get_signals_msg(update, context):
     await msg.delete()
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
+    # Top signal uchun chart yuborish
+    try:
+        from services.trading_engine import TradingEngine
+        engine2 = TradingEngine(client)
+        all_sigs = await engine2.get_top_signals(3, min_conf=70)
+        if all_sigs:
+            top = all_sigs[0]
+            candles = client.get_futures_candles(top["symbol"], "1H", 100)
+            if candles.get("code") == "00000":
+                from services.chart_generator import generate_signal_chart
+                from services.analyzer import estimate_trade_duration
+                tf = top.get("timeframe", "1H")
+                dur = estimate_trade_duration(tf, top["confidence"])
+                buf = generate_signal_chart(
+                    candles_data=candles.get("data", []),
+                    symbol=top["symbol"],
+                    direction=top["direction"],
+                    entry=top["entry"], tp1=top["tp1"],
+                    tp2=top["tp2"], sl=top["sl"],
+                    confidence=top["confidence"],
+                    timeframe=tf, duration_label=dur,
+                )
+                from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                chart_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("💰 Savdoga Kirish", callback_data=f"manual_trade_{top['symbol']}")
+                ]])
+                gs.pending_manual_trades[top["symbol"]] = top
+                await update.message.reply_photo(
+                    photo=buf,
+                    caption=f"📊 {top['symbol']} — {top['confidence']}% ishonch  |  ⌛ {dur}",
+                    reply_markup=chart_kb
+                )
+    except Exception:
+        pass
+
 
 async def _show_coin_analysis_msg(update, context, symbol: str):
-    """Quick BTC/ETH multi-timeframe analysis."""
     await _do_coin_analysis(update.message, context, symbol, send_photo=True)
 
 
 async def do_coin_analysis_callback(update: Update, context, symbol: str):
-    """BTC/ETH analysis triggered from InlineKeyboard callback."""
     query = update.callback_query
     await query.answer("📊 Tahlil qilinmoqda...")
     loading_msg = await query.message.reply_text(
@@ -239,7 +370,6 @@ async def do_coin_analysis_callback(update: Update, context, symbol: str):
 
 async def _do_coin_analysis(msg_or_message, context, symbol: str,
                              send_photo: bool = True, delete_first: bool = False):
-    """Shared BTC/ETH analysis logic."""
     if delete_first:
         try:
             await msg_or_message.delete()
@@ -282,7 +412,6 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
         )
         return
 
-    # Build analysis text
     lines = [f"📊 <b>{symbol} — TAHLIL</b>"]
     for tf, sig, _ in results:
         conf  = sig["confidence"]
@@ -296,6 +425,11 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
         vol   = sig.get("volume_ratio", 1.0)
         trend_map = {"up": "↑ O'sish", "down": "↓ Pasayish", "sideways": "→ Yon"}
         reasons = sig.get("reasons", [])
+        entry = sig.get("entry", 0)
+        tp1   = sig.get("tp1", 0)
+        tp2   = sig.get("tp2", 0)
+        sl    = sig.get("sl", 0)
+        from utils.formatters import fmt_price, _pct
 
         lines += [
             f"\n{'─'*28}",
@@ -307,11 +441,14 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
             f"⚡ ADX: <code>{adx:.0f}</code>",
             f"📉 Trend: <code>{trend_map.get(trend,'→')}</code>",
             f"📦 Hajm: <code>{vol:.1f}x</code>",
+            f"💲 Kirish: <code>${fmt_price(entry)}</code>",
+            f"💚 TP1 (80%): <code>${fmt_price(tp1)}</code>  ({_pct(tp1, entry)})",
+            f"💚 TP2 (20%): <code>${fmt_price(tp2)}</code>  ({_pct(tp2, entry)})",
+            f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct(sl, entry)})",
         ]
         if reasons:
             lines.append(f"💡 " + " • ".join(reasons[:3]))
 
-    # Overall verdict
     long_votes  = sum(1 for _, s, _ in results if s["direction"] == "LONG")
     short_votes = sum(1 for _, s, _ in results if s["direction"] == "SHORT")
     avg_conf    = sum(s["confidence"] for _, s, _ in results) / len(results)
@@ -329,9 +466,11 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
 
     # Send chart for best timeframe (4H preferred)
     if send_photo and results:
-        best_tf, best_sig, best_candles = results[-1]  # prefer 4H
+        best_tf, best_sig, best_candles = results[-1]
         try:
             from services.chart_generator import generate_signal_chart
+            from services.analyzer import estimate_trade_duration
+            dur = estimate_trade_duration(best_tf, best_sig["confidence"])
             buf = generate_signal_chart(
                 candles_data=best_candles,
                 symbol=symbol,
@@ -342,9 +481,18 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
                 sl=best_sig["sl"],
                 confidence=best_sig["confidence"],
                 timeframe=best_tf,
+                duration_label=dur,
             )
-            await send_photo_fn(photo=buf,
-                                caption=f"📊 {symbol} {best_tf} — {best_sig['confidence']}% ishonch")
+            # "Savdoga Kirish" tugmasi — faqat 4 ta maxsus crypto uchun
+            chart_kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("💰 Savdoga Kirish", callback_data=f"manual_trade_{symbol}")
+            ]])
+            gs.pending_manual_trades[symbol] = best_sig
+            await send_photo_fn(
+                photo=buf,
+                caption=f"📊 {symbol} {best_tf} — {best_sig['confidence']}% ishonch  |  ⌛ {dur}",
+                reply_markup=chart_kb
+            )
         except Exception as e:
             pass
 
@@ -376,8 +524,8 @@ async def handle_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚙️ <b>Qoidalar:</b>\n"
         "├ 70%+ → Avtomatik savdo + rasm\n"
         "├ <70% → Faqat tarixda saqlanadi\n"
-        "├ Order: $1–$5\n"
-        "└ TP×2, SL×1, KROSS leverage"
+        "├ TP1: 80%, TP2: 20%\n"
+        "└ KROSS leverage, maksimal"
     )
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Bosh menyu", callback_data="main_menu")]])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")

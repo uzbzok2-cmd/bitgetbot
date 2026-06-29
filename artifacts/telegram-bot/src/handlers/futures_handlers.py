@@ -9,7 +9,7 @@ from services.bitget_client import BitgetClient
 from services.analyzer import safe_float
 from utils.formatters import (
     format_futures_balance, format_open_orders,
-    format_tp_sl_orders, format_history, format_top_signals
+    format_tp_sl_orders, format_history, format_top_signals, fmt_price, _pct
 )
 
 client = BitgetClient()
@@ -99,18 +99,6 @@ async def handle_futures_positions(update: Update, context: ContextTypes.DEFAULT
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
-def _fmt(p: float) -> str:
-    if p == 0:
-        return "0"
-    if p >= 1000:
-        return f"{p:,.2f}"
-    elif p >= 1:
-        return f"{p:.4f}"
-    elif p >= 0.01:
-        return f"{p:.6f}"
-    return f"{p:.8f}"
-
-
 def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_rates: dict) -> str:
     if not positions_data or positions_data.get("code") != "00000":
         return "❌ <b>Pozitsiyalar olinmadi</b>"
@@ -146,6 +134,9 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         c_time  = pos.get("cTime", "")
         time_str = datetime.fromtimestamp(int(c_time)/1000, tz=timezone.utc).strftime("%m/%d %H:%M") if c_time else "—"
 
+        # Current mark vs entry %
+        mark_pct_str = _pct(mark_price, avg_price) if avg_price > 0 else ""
+
         # Get TP/SL from plan_map
         key = f"{symbol}-{hold_side}"
         plans = plan_map.get(key, [])
@@ -153,9 +144,9 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         for p in plans:
             pt = p.get("planType", "")
             trig = safe_float(p.get("triggerPrice", 0))
-            if "profit" in pt and trig > 0:
+            if ("profit" in pt) and trig > 0:
                 tps.append(trig)
-            elif "loss" in pt and trig > 0:
+            elif ("loss" in pt) and trig > 0:
                 sls.append(trig)
         tps.sort(reverse=(hold_side == "long"))
         sls.sort()
@@ -163,30 +154,33 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         lines.append(
             f"\n{'─'*28}\n"
             f"💎 <b>{symbol}</b> — {dir_str}\n"
-            f"📈 <b>Kirish:</b>     <code>${_fmt(avg_price)}</code>\n"
-            f"💹 <b>Mark narx:</b>  <code>${_fmt(mark_price)}</code>\n"
+            f"📈 <b>Kirish:</b>     <code>${fmt_price(avg_price)}</code>\n"
+            f"💹 <b>Mark narx:</b>  <code>${fmt_price(mark_price)}</code>  ({mark_pct_str})\n"
             f"📦 <b>Hajm:</b>       <code>{size} ≈ {pos_value:.2f} USDT</code>\n"
             f"⚡ <b>Leverage:</b>   <code>{int(leverage)}x</code>  🔒 <code>{margin:.4f} USDT</code>\n"
             f"{pnl_e} <b>PnL:</b> <code>{unrealized:+.4f} USDT</code> (<code>{pnl_pct:+.2f}%</code>)\n"
         )
 
-        # TP levels
+        # TP levels with % from entry
         if tps:
             for i, tp in enumerate(tps[:2], 1):
-                lines.append(f"💚 <b>TP{i}:</b> <code>${_fmt(tp)}</code>")
+                tp_pct_str = _pct(tp, avg_price) if avg_price > 0 else ""
+                pct_label = f"80%" if i == 1 else f"20%"
+                lines.append(f"💚 <b>TP{i} ({pct_label}):</b> <code>${fmt_price(tp)}</code>  ({tp_pct_str})")
         else:
-            lines.append(f"💚 <b>TP:</b> <code>—</code>")
+            lines.append(f"💚 <b>TP:</b> <code>Qo'yilmagan</code>")
 
-        # SL levels
+        # SL level with % from entry
         if sls:
-            lines.append(f"🛑 <b>SL:</b>  <code>${_fmt(sls[0])}</code>")
+            sl_pct_str = _pct(sls[0], avg_price) if avg_price > 0 else ""
+            lines.append(f"🛑 <b>SL:</b>  <code>${fmt_price(sls[0])}</code>  ({sl_pct_str})")
         else:
-            lines.append(f"🛑 <b>SL:</b>  <code>—</code>")
+            lines.append(f"🛑 <b>SL:</b>  <code>Qo'yilmagan</code>")
 
         lines.append(
             f"💸 <b>8H Funding:</b> <code>-{fund_8h:.4f} USDT</code>  "
             f"🏦 <code>-{abs(total_fee):.4f}</code>\n"
-            f"💣 <b>Lik. narxi:</b> <code>${_fmt(liq_price)}</code>  "
+            f"💣 <b>Lik. narxi:</b> <code>${fmt_price(liq_price)}</code>  "
             f"🕒 <code>{time_str}</code>"
         )
 
@@ -298,13 +292,17 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
-    # Send chart for top signal
+    # Send chart for top signal with "Savdoga Kirish" button
     if signals:
         top_sig = signals[0]
         try:
             candles = client.get_futures_candles(top_sig["symbol"], "1H", 100)
             if candles.get("code") == "00000":
                 from services.chart_generator import generate_signal_chart
+                from services.analyzer import estimate_trade_duration
+                from services import state as gs
+                tf = top_sig.get("timeframe", "1H")
+                dur = estimate_trade_duration(tf, top_sig["confidence"])
                 buf = generate_signal_chart(
                     candles_data=candles.get("data", []),
                     symbol=top_sig["symbol"],
@@ -314,10 +312,20 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
                     tp2=top_sig["tp2"],
                     sl=top_sig["sl"],
                     confidence=top_sig["confidence"],
+                    timeframe=tf,
+                    duration_label=dur,
                 )
+                chart_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "💰 Savdoga Kirish",
+                        callback_data=f"manual_trade_{top_sig['symbol']}"
+                    )
+                ]])
+                gs.pending_manual_trades[top_sig["symbol"]] = top_sig
                 await query.message.reply_photo(
                     photo=buf,
-                    caption=f"📊 Eng yuqori signal: {top_sig['symbol']} {top_sig['confidence']}%"
+                    caption=f"📊 Eng yuqori signal: {top_sig['symbol']} {top_sig['confidence']}%  |  ⌛ {dur}",
+                    reply_markup=chart_kb
                 )
         except Exception as e:
             pass
