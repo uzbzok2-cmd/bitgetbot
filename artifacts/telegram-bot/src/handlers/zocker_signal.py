@@ -160,14 +160,11 @@ class ZockerScanner:
         self.active         = True
         self.last_alerts: Dict[str, float] = {}
 
-    def _key(self, symbol: str, tf: str) -> str:
-        return f"{symbol}_{tf}"
+    def _is_on_cooldown(self, symbol: str) -> bool:
+        return (time.time() - self.last_alerts.get(symbol, 0)) < ZOCKER_COOLDOWN
 
-    def _is_on_cooldown(self, symbol: str, tf: str) -> bool:
-        return (time.time() - self.last_alerts.get(self._key(symbol, tf), 0)) < ZOCKER_COOLDOWN
-
-    def _set_cooldown(self, symbol: str, tf: str):
-        self.last_alerts[self._key(symbol, tf)] = time.time()
+    def _set_cooldown(self, symbol: str):
+        self.last_alerts[symbol] = time.time()
 
     async def _get_all_symbols(self) -> List[str]:
         """Bitgetdan barcha USDT futures symbollarini hajm bo'yicha olish."""
@@ -198,57 +195,94 @@ class ZockerScanner:
             await asyncio.sleep(ZOCKER_CHECK_INTERVAL)
 
     async def _scan_all(self):
+        """
+        Barcha symbollarni skanerlab, eng yaxshi 5-6 ta signalni topib yuboradi.
+        Bir xil symbol qayta yuborilmaydi (4 soat cooldown, symbol asosida).
+        Ranking: 4H > 1H; count=7 > count=6; har symboldan faqat bittasi.
+        """
         symbols = await self._get_all_symbols()
+        candidates = []  # (score, symbol, tf, direction, count, raw)
+
         for symbol in symbols:
+            if self._is_on_cooldown(symbol):
+                continue
             for tf in ZOCKER_TIMEFRAMES:
-                if self._is_on_cooldown(symbol, tf):
-                    continue
                 try:
-                    await self._check_symbol(symbol, tf)
-                    await asyncio.sleep(0.2)
+                    candles = self.client.get_futures_candles(symbol, tf, 50)
+                    if candles.get("code") != "00000":
+                        await asyncio.sleep(0.1)
+                        continue
+                    raw = candles.get("data", [])
+                    if not raw:
+                        continue
+                    result = detect_consecutive_candles(raw, ZOCKER_MIN_CANDLES, ZOCKER_MAX_CANDLES)
+                    if result:
+                        direction, count = result
+                        # Score: 4H=10, 1H=0; har qo'shimcha sham +2
+                        score = (10 if tf == "4H" else 0) + (count - ZOCKER_MIN_CANDLES) * 2
+                        candidates.append((score, symbol, tf, direction, count, raw))
+                    await asyncio.sleep(0.15)
                 except Exception as e:
                     logger.warning(f"Zocker {symbol} {tf}: {e}")
 
-    async def _check_symbol(self, symbol: str, tf: str):
-        candles = self.client.get_futures_candles(symbol, tf, 50)
-        if candles.get("code") != "00000":
-            return
-        raw = candles.get("data", [])
-        if not raw:
-            return
+        # Har symbol uchun faqat eng yaxshi timeframe/score ni saqla
+        best_per_symbol: Dict[str, tuple] = {}
+        for score, symbol, tf, direction, count, raw in candidates:
+            prev = best_per_symbol.get(symbol)
+            if prev is None or score > prev[0]:
+                best_per_symbol[symbol] = (score, tf, direction, count, raw)
 
-        result = detect_consecutive_candles(raw, ZOCKER_MIN_CANDLES, ZOCKER_MAX_CANDLES)
-        if not result:
-            return
+        # Score bo'yicha saralab, eng yaxshi 5-6 tasini ol
+        ranked = sorted(best_per_symbol.items(), key=lambda x: x[1][0], reverse=True)
+        top = ranked[:6]
 
-        direction, count = result
-        self._set_cooldown(symbol, tf)
-        color_txt = "yashil" if direction == "SHORT" else "qizil"
-        logger.info(f"🕯️ Zocker: {symbol} {tf} → {direction} ({count} ta {color_txt} sham)")
-        gs.scanner.add_log(f"🕯️ ZOCKER: {symbol} {tf} {direction} {count}ta {color_txt}")
+        if top:
+            gs.scanner.add_log(f"🕯️ Zocker: {len(top)} ta signal topildi (jami {len(candidates)} kandidat)")
+        else:
+            gs.scanner.add_log("🕯️ Zocker: signal topilmadi")
 
-        await self._handle_signal(symbol, tf, direction, count, raw)
+        for symbol, (score, tf, direction, count, raw) in top:
+            self._set_cooldown(symbol)
+            color_txt = "yashil" if direction == "SHORT" else "qizil"
+            logger.info(f"🕯️ Zocker: {symbol} {tf} → {direction} ({count} ta {color_txt}, score={score})")
+            gs.scanner.add_log(f"🕯️ ZOCKER: {symbol} {tf} {direction} {count}ta {color_txt}")
+            await self._handle_signal(symbol, tf, direction, count, raw)
+            await asyncio.sleep(1.5)
 
     async def _handle_signal(self, symbol: str, tf: str, direction: str, count: int, raw: list):
         """Signal topilganda: alert yuborish + avtomatik savdo."""
         entry, tp, sl, atr = 0.0, 0.0, 0.0, 0.0
+
+        # 1-qadam: analyze_symbol orqali entry olish
         try:
             sig = analyze_symbol(raw, symbol, tf)
-            if sig:
+            if sig and safe_float(sig.get("entry", 0)) > 0:
                 entry = sig["entry"]
                 atr   = sig.get("atr", entry * 0.02)
-                # Half-candle TP/SL usuli (ATR emas, shamlar HIGH/LOW ga asoslangan)
-                tp, sl = _calc_half_candle_tp_sl(direction, raw, entry, count)
         except Exception as e:
             logger.warning(f"Zocker analyze {symbol}: {e}")
-            # Fallback: entry topish uchun API ticker
+
+        # 2-qadam: entry=0 bo'lsa ticker orqali ol
+        if entry <= 0:
             try:
                 tk = self.client.get_futures_ticker(symbol)
                 if tk.get("code") == "00000" and tk.get("data"):
                     entry = safe_float(tk["data"][0].get("lastPr", 0))
-                    tp, sl = _calc_half_candle_tp_sl(direction, raw, entry, count)
+                    atr   = entry * 0.02
             except Exception:
                 pass
+
+        # 3-qadam: hali ham 0 bo'lsa — oxirgi sham yopilish narxidan foydalanish
+        if entry <= 0 and raw:
+            try:
+                entry = safe_float(raw[-1][4])
+                atr   = entry * 0.02
+            except Exception:
+                pass
+
+        # TP/SL hisoblash — entry mavjud bo'lganda
+        if entry > 0:
+            tp, sl = _calc_half_candle_tp_sl(direction, raw, entry, count)
 
         if entry > 0:
             gs.pending_manual_trades[symbol] = {
