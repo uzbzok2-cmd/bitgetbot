@@ -23,8 +23,9 @@ def futures_main_keyboard():
          InlineKeyboardButton("🎯 TP/SL", callback_data="fut_tpsl")],
         [InlineKeyboardButton("📜 Tarix", callback_data="fut_history"),
          InlineKeyboardButton("🏆 Top Signallar", callback_data="fut_signals")],
-        [InlineKeyboardButton("🔄 Yangilash", callback_data="section_futures"),
-         InlineKeyboardButton("🏠 Bosh", callback_data="main_menu")],
+        [InlineKeyboardButton("🕯️ Zocker Signal", callback_data="fut_zocker"),
+         InlineKeyboardButton("🔄 Yangilash", callback_data="section_futures")],
+        [InlineKeyboardButton("🏠 Bosh", callback_data="main_menu")],
     ])
 
 
@@ -240,20 +241,112 @@ async def handle_futures_history(update: Update, context: ContextTypes.DEFAULT_T
     else:
         start_ms = 0
 
-    data = client.get_futures_order_history(
+    # Fill-history dan foydalanamiz — leverage va profit aniq ko'rsatiladi
+    data = client.get_futures_history(
         start_time=str(start_ms) if start_ms else "",
         end_time=str(now_ms), limit=100
     )
     orders = []
     if data.get("code") == "00000":
         d = data.get("data", {})
-        orders = d.get("entrustedList", d.get("orderList", [])) if isinstance(d, dict) else (d or [])
+        if isinstance(d, dict):
+            orders = d.get("fillList", d.get("entrustedList", d.get("orderList", [])))
+        elif isinstance(d, list):
+            orders = d
+
+    # Agar fill-history bo'sh bo'lsa, order-history ga fallback
+    if not orders:
+        data2 = client.get_futures_order_history(
+            start_time=str(start_ms) if start_ms else "",
+            end_time=str(now_ms), limit=100
+        )
+        if data2.get("code") == "00000":
+            d2 = data2.get("data", {})
+            orders = d2.get("entrustedList", d2.get("orderList", [])) if isinstance(d2, dict) else (d2 or [])
 
     text = format_history(orders, label, "futures")
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Yangilash", callback_data=f"fut_hist_{period}"),
          InlineKeyboardButton("🔙 Tarix", callback_data="fut_history"),
          InlineKeyboardButton("🏠 Bosh", callback_data="main_menu")]
+    ])
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def handle_zocker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Zocker Signal bo'limi — qo'lda skan va ma'lumot."""
+    query = update.callback_query
+    await query.answer("🕯️ Zocker Signal...")
+    text = (
+        "🕯️ <b>ZOCKER SIGNAL BO'LIMI</b>\n"
+        "══════════════════════════════\n\n"
+        "Zocker signal — <b>6-7 ta ketma-ket bir xil rangdagi shamlar</b> "
+        "aniqlanganda avtomatik xabar yuboradi.\n\n"
+        "🟢 <b>6-7 ta yashil sham</b> → LONG (xarid) imkoni\n"
+        "🔴 <b>6-7 ta qizil sham</b> → SHORT (sotish) imkoni\n\n"
+        "⏱️ <b>Tekshiriladi:</b> 1H • 4H • 1D\n"
+        "🔄 <b>Interval:</b> Har 5 daqiqada\n"
+        "⏱️ <b>Cooldown:</b> Har symbol uchun 4 soat\n\n"
+        "📋 <b>Tekshirilayotgan cryptolar:</b>\n"
+        "BTC, ETH, BNB, SOL, XRP, DOGE,\n"
+        "ADA, AVAX, LTC, DOT, LINK, MATIC\n\n"
+        "💡 <b>Qo'lda skan</b> tugmasini bosib hozirgi holatni tekshiring:"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Hozir Skan Qil", callback_data="zocker_scan_now")],
+        [InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")],
+    ])
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def handle_zocker_scan_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Hozirgi vaqtda Zocker signalini qo'lda skan qilish."""
+    query = update.callback_query
+    await query.answer("🔍 Skanerlayapti...")
+    await query.edit_message_text(
+        "🕯️ <b>Zocker skan boshlandi...</b>\n\n"
+        "BTC, ETH, BNB, SOL... tekshirilmoqda\n"
+        "⏳ <i>20-30 soniya kuting...</i>",
+        parse_mode="HTML"
+    )
+    from handlers.zocker_signal import ZockerScanner, ZOCKER_SYMBOLS, ZOCKER_TIMEFRAMES, detect_consecutive_candles
+    from services import state as gs
+
+    found = []
+    scan_client = BitgetClient()
+    for symbol in ZOCKER_SYMBOLS[:12]:
+        for tf in ["1H", "4H"]:
+            try:
+                candles = scan_client.get_futures_candles(symbol, tf, 30)
+                if candles.get("code") != "00000":
+                    continue
+                raw = candles.get("data", [])
+                result = detect_consecutive_candles(raw, 5, 7)
+                if result:
+                    direction, count = result
+                    found.append((symbol, tf, direction, count))
+            except Exception:
+                pass
+
+    if not found:
+        text = (
+            "🕯️ <b>ZOCKER SKAN NATIJASI</b>\n"
+            "══════════════════════════\n\n"
+            "✅ Hozir 6-7 ta ketma-ket sham aniqlanmadi.\n"
+            "Bozor aralash holda.\n\n"
+            f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>"
+        )
+    else:
+        lines = ["🕯️ <b>ZOCKER SIGNALLARI TOPILDI!</b>\n══════════════════════════\n"]
+        for sym, tf, dir_, cnt in found[:8]:
+            dir_e = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
+            lines.append(f"• <b>{sym}</b> {tf}: {cnt} ta ketma-ket sham → {dir_e}")
+        lines.append(f"\n🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>")
+        text = "\n".join(lines)
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Qayta Skan", callback_data="zocker_scan_now"),
+         InlineKeyboardButton("🔙 Orqaga", callback_data="fut_zocker")],
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 

@@ -186,17 +186,14 @@ def detect_smc(closes: np.ndarray, highs: np.ndarray, lows: np.ndarray) -> Dict:
 
 
 def detect_price_action(closes: np.ndarray, highs: np.ndarray, lows: np.ndarray) -> Dict:
-    """Detect key price action patterns."""
     if len(closes) < 5:
         return {"pattern": "none", "bullish": False, "bearish": False}
-    # Engulfing
     bullish_engulf = (closes[-1] > closes[-2] and
                       closes[-1] > highs[-2] and
                       closes[-2] < lows[-3] if len(closes) > 3 else False)
     bearish_engulf = (closes[-1] < closes[-2] and
                       closes[-1] < lows[-2] and
                       closes[-2] > highs[-3] if len(closes) > 3 else False)
-    # Hammer/Shooting star
     body = abs(closes[-1] - closes[-2])
     upper_wick = highs[-1] - max(closes[-1], closes[-2])
     lower_wick = min(closes[-1], closes[-2]) - lows[-1]
@@ -211,7 +208,6 @@ def detect_price_action(closes: np.ndarray, highs: np.ndarray, lows: np.ndarray)
 
 
 def compute_trend_strength(closes: np.ndarray) -> Tuple[str, float]:
-    """Determine trend direction and strength using price position."""
     if len(closes) < 50:
         return "sideways", 0.5
     ema20 = compute_ema(closes, 20)
@@ -227,7 +223,6 @@ def compute_trend_strength(closes: np.ndarray) -> Tuple[str, float]:
 
 
 def estimate_trade_duration(timeframe: str, confidence: int = 70) -> str:
-    """Signal qancha vaqt ichida natijaga chiqishini taxmin qiladi."""
     tf_to_hours = {
         "1M": 0.017, "3M": 0.05, "5M": 0.083, "15M": 0.25, "30M": 0.5,
         "1H": 1, "2H": 2, "4H": 4, "6H": 6, "12H": 12,
@@ -249,8 +244,8 @@ def estimate_trade_duration(timeframe: str, confidence: int = 70) -> str:
 
 def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Optional[Dict]:
     """
-    Full multi-indicator analysis. Returns signal dict or None if no clear signal.
-    Confidence 55%+ triggers signal (55-60% needs permission, 60%+ auto-trade).
+    Full multi-indicator analysis with trend-break filter.
+    Kuchli filter: trend buzilsa BUY signal berilmaydi.
     """
     if not candles_data or len(candles_data) < 50:
         return None
@@ -287,21 +282,51 @@ def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Op
     prev    = closes[-2] if len(closes) > 1 else current
     change_pct = (current - prev) / prev * 100 if prev > 0 else 0.0
 
+    # ── Sham rangi va trend filtrlari ─────────────────────
+    last_candle_bearish = closes[-1] < opens[-1] * 0.9998  # Qizil sham
+    last_candle_bullish = closes[-1] > opens[-1] * 1.0002  # Yashil sham
+
+    # So'nggi 3 ta sham ketma-ket pasayish (closes[-1] < closes[-2] < closes[-3])
+    three_bear = (len(closes) >= 4 and
+                  closes[-1] < closes[-2] and closes[-2] < closes[-3])
+    # So'nggi 3 ta sham ketma-ket o'sish
+    three_bull = (len(closes) >= 4 and
+                  closes[-1] > closes[-2] and closes[-2] > closes[-3])
+
+    # EMA50 trend buzilishi: AVVALDA yuqorida, HOZIR pastda → pastga buzildi
+    trend_break_down = (len(closes) >= 3 and
+                        closes[-1] < ema50 and
+                        (closes[-2] >= ema50 or closes[-3] >= ema50))
+    # EMA50 trend buzilishi: AVVALDA pastda, HOZIR yuqorida → yuqoriga buzildi
+    trend_break_up   = (len(closes) >= 3 and
+                        closes[-1] > ema50 and
+                        (closes[-2] <= ema50 or closes[-3] <= ema50))
+
+    # So'nggi 5 shamdan 4+ si qizil mi?
+    if len(closes) >= 6:
+        last5_colors = [1 if closes[i] > opens[i] else -1 for i in range(-5, 0)]
+        bearish_dominant = last5_colors.count(-1) >= 4
+        bullish_dominant = last5_colors.count(1) >= 4
+    else:
+        bearish_dominant = False
+        bullish_dominant = False
+
+    # ── Scoring ───────────────────────────────────────────
     score_long = 0
     score_short = 0
     reasons_long = []
     reasons_short = []
-    max_score = 100
+    max_score = 130
 
     # RSI (max 18)
     if rsi < 30:
-        score_long += 18; reasons_long.append(f"RSI={rsi:.0f} past haddan oshdi")
+        score_long += 18; reasons_long.append(f"RSI={rsi:.0f} oversold")
     elif rsi < 40:
         score_long += 12; reasons_long.append(f"RSI={rsi:.0f} past zona")
     elif rsi < 50:
         score_long += 6
     elif rsi > 70:
-        score_short += 18; reasons_short.append(f"RSI={rsi:.0f} yuqori haddan oshdi")
+        score_short += 18; reasons_short.append(f"RSI={rsi:.0f} overbought")
     elif rsi > 60:
         score_short += 12; reasons_short.append(f"RSI={rsi:.0f} yuqori zona")
     elif rsi > 55:
@@ -340,11 +365,13 @@ def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Op
         else:
             score_short += 8; reasons_short.append(f"ADX={adx:.0f} trend kuchli")
 
-    # Supertrend (max 14)
+    # Supertrend (max 14) — KUCHLI INDIKATOR: qarama-qarshi yo'nalishga jazo
     if st_trend == 1:
-        score_long += 14; reasons_long.append("Supertrend o'sish")
+        score_long += 14; reasons_long.append("Supertrend o'sish ↑")
+        score_short -= 12   # SHORT bekor qiluvchi kuch
     else:
-        score_short += 14; reasons_short.append("Supertrend pasayish")
+        score_short += 14; reasons_short.append("Supertrend pasayish ↓")
+        score_long -= 12    # LONG bekor qiluvchi kuch — eng muhim fix
 
     # Bollinger Bands (max 10)
     if current < bb_lower:
@@ -388,22 +415,62 @@ def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Op
     elif trend_dir == "down":
         score_short += 7
 
-    # Score to confidence
-    long_conf  = min(95, int(score_long / max_score * 100))
-    short_conf = min(95, int(score_short / max_score * 100))
+    # ── YANGI: Trend buzilish filtri (max ±20) ─────────────
+    if trend_break_down:
+        score_short += 20
+        score_long  -= 18
+        reasons_short.append("⚠️ EMA50 pastga tushdi — trend buzildi")
+    elif trend_break_up:
+        score_long  += 20
+        score_short -= 18
+        reasons_long.append("⚠️ EMA50 yuqoriga chiqdi — trend yuqoriga")
+
+    # ── YANGI: Ketma-ket sham yo'nalishi (max ±10) ─────────
+    if three_bear:
+        score_short += 10
+        score_long  -= 12
+        reasons_short.append("3 ketma-ket pasayish sham")
+    elif three_bull:
+        score_long  += 10
+        score_short -= 12
+        reasons_long.append("3 ketma-ket o'sish sham")
+
+    # ── YANGI: Dominant sham rangi (max ±8) ────────────────
+    if bearish_dominant:
+        score_short += 8
+        score_long  -= 10
+        reasons_short.append("5 ta shamdan 4+ qizil")
+    elif bullish_dominant:
+        score_long  += 8
+        score_short -= 10
+        reasons_long.append("5 ta shamdan 4+ yashil")
+
+    # ── YANGI: So'nggi sham rangi tasdiqi (max ±6) ─────────
+    if last_candle_bearish:
+        score_short += 6
+        score_long  -= 5
+        reasons_short.append("So'nggi sham qizil yopildi")
+    elif last_candle_bullish:
+        score_long  += 6
+        score_short -= 5
+        reasons_long.append("So'nggi sham yashil yopildi")
+
+    # ── Confidence hisoblash ───────────────────────────────
+    long_conf  = min(95, max(0, int(score_long / max_score * 100)))
+    short_conf = min(95, max(0, int(score_short / max_score * 100)))
 
     if long_conf > short_conf and long_conf >= 55:
-        direction   = "LONG"
-        confidence  = long_conf
-        reasons     = reasons_long
+        direction  = "LONG"
+        confidence = long_conf
+        reasons    = reasons_long
     elif short_conf > long_conf and short_conf >= 55:
-        direction   = "SHORT"
-        confidence  = short_conf
-        reasons     = reasons_short
+        direction  = "SHORT"
+        confidence = short_conf
+        reasons    = reasons_short
     else:
         return None
 
-    # ATR-based TP/SL
+    # ── ATR-based TP/SL ───────────────────────────────────
     atr_mult = 1.5
     if direction == "LONG":
         sl  = round(current - atr * atr_mult, 8)
@@ -421,32 +488,32 @@ def analyze_symbol(candles_data: list, symbol: str, timeframe: str = "1H") -> Op
     rr = abs(tp1 - current) / abs(sl - current) if abs(sl - current) > 0 else 1.0
 
     return {
-        "symbol":       symbol,
-        "direction":    direction,
-        "confidence":   confidence,
-        "entry":        round(current, 8),
-        "entry_low":    entry_low,
-        "entry_high":   entry_high,
-        "tp1":          tp1,
-        "tp2":          tp2,
-        "sl":           sl,
-        "atr":          round(atr, 8),
-        "rsi":          round(rsi, 1),
-        "macd":         round(macd_line, 8),
-        "macd_hist":    round(histogram, 8),
-        "adx":          round(adx, 1),
-        "ema9":         round(ema9, 6),
-        "ema21":        round(ema21, 6),
-        "ema50":        round(ema50, 6),
-        "supertrend":   round(st_level, 6),
+        "symbol":         symbol,
+        "direction":      direction,
+        "confidence":     confidence,
+        "entry":          round(current, 8),
+        "entry_low":      entry_low,
+        "entry_high":     entry_high,
+        "tp1":            tp1,
+        "tp2":            tp2,
+        "sl":             sl,
+        "atr":            round(atr, 8),
+        "rsi":            round(rsi, 1),
+        "macd":           round(macd_line, 8),
+        "macd_hist":      round(histogram, 8),
+        "adx":            round(adx, 1),
+        "ema9":           round(ema9, 6),
+        "ema21":          round(ema21, 6),
+        "ema50":          round(ema50, 6),
+        "supertrend":     round(st_level, 6),
         "supertrend_dir": "o'sish ↑" if st_trend == 1 else "pasayish ↓",
-        "volume_ratio": round(vol_ratio, 2),
-        "stoch_k":      round(stoch_k, 1),
-        "risk_reward":  round(rr, 1),
-        "support":      round(support, 8),
-        "resistance":   round(resistance, 8),
-        "trend_dir":    trend_dir,
-        "change_24h":   round(change_pct, 2),
-        "reasons":      reasons,
-        "timeframe":    timeframe,
+        "volume_ratio":   round(vol_ratio, 2),
+        "stoch_k":        round(stoch_k, 1),
+        "risk_reward":    round(rr, 1),
+        "support":        round(support, 8),
+        "resistance":     round(resistance, 8),
+        "trend_dir":      trend_dir,
+        "change_24h":     round(change_pct, 2),
+        "reasons":        reasons,
+        "timeframe":      timeframe,
     }

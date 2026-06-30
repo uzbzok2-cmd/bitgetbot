@@ -12,6 +12,7 @@ from handlers.futures_handlers import (
     show_futures_main, handle_futures_balance, handle_futures_positions,
     handle_futures_open_orders, handle_futures_tpsl,
     handle_futures_history_menu, handle_futures_history, handle_futures_signals,
+    handle_zocker_menu, handle_zocker_scan_now,
 )
 from handlers.spot_handlers import (
     show_spot_main, handle_spot_balance, handle_spot_assets,
@@ -108,7 +109,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = data[len("spot_trade_"):]
         await _handle_manual_trade_request(update, context, symbol)
 
-    # ── Analysis (BTC, ETH, PAXG, XAUT) ──────────────────
+    # ── Zocker Signal ─────────────────────────────────────
+    elif data == "fut_zocker":
+        await handle_zocker_menu(update, context)
+    elif data == "zocker_scan_now":
+        await handle_zocker_scan_now(update, context)
+
+    # ── Analysis (BTC, ETH, PAXG, XAUT, CL) ──────────────
     elif data == "btc_analysis":
         await do_coin_analysis_callback(update, context, "BTCUSDT")
     elif data == "eth_analysis":
@@ -117,6 +124,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_coin_analysis_callback(update, context, "PAXGUSDT")
     elif data == "xaut_analysis":
         await do_coin_analysis_callback(update, context, "XAUTUSDT")
+    elif data == "cl_analysis":
+        await do_coin_analysis_callback(update, context, "CLUSDT")
 
     # ── Manual trade ("Savdoga Kirish" tugmasi) ───────────
     elif data.startswith("manual_trade_"):

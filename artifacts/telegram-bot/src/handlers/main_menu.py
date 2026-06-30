@@ -24,7 +24,13 @@ ANALYSIS_SYMBOLS_LIST = [
     ("📊 ETH",  "ETHUSDT"),
     ("💎 PAXG", "PAXGUSDT"),
     ("🥇 XAUT", "XAUTUSDT"),
+    ("🛢️ CL",   "CLUSDT"),
 ]
+
+# Spot orqali candle olinadigan symbollar
+SPOT_ONLY_SYMBOLS = {"PAXGUSDT", "XAUTUSDT"}
+# Bitget commodity futures symbollar (COIN-M yoki USDT-M)
+COMMODITY_SYMBOLS = {"CLUSDT"}
 
 
 def bottom_reply_keyboard():
@@ -33,7 +39,7 @@ def bottom_reply_keyboard():
             [KeyboardButton("📈 FYUCHERS"), KeyboardButton("🪙 SPOT")],
             [KeyboardButton("🤖 Bot Holati"), KeyboardButton("📜 Signal Tarixi")],
             [KeyboardButton("📊 BTC"), KeyboardButton("📊 ETH"),
-             KeyboardButton("💎 PAXG"), KeyboardButton("🥇 XAUT")],
+             KeyboardButton("💎 PAXG"), KeyboardButton("🥇 XAUT"), KeyboardButton("🛢️ CL")],
             [KeyboardButton("🔍 Hozir Signal Ol")],
             [KeyboardButton("📉 Statistika"), KeyboardButton("⚙️ Sozlamalar")],
         ],
@@ -52,7 +58,8 @@ def main_inline_keyboard():
         [InlineKeyboardButton("📊 BTC", callback_data="btc_analysis"),
          InlineKeyboardButton("📊 ETH", callback_data="eth_analysis"),
          InlineKeyboardButton("💎 PAXG", callback_data="paxg_analysis"),
-         InlineKeyboardButton("🥇 XAUT", callback_data="xaut_analysis")],
+         InlineKeyboardButton("🥇 XAUT", callback_data="xaut_analysis"),
+         InlineKeyboardButton("🛢️ CL", callback_data="cl_analysis")],
         [InlineKeyboardButton("⚙️ Sozlamalar", callback_data="settings"),
          InlineKeyboardButton("ℹ️ Haqida", callback_data="about")],
     ])
@@ -140,6 +147,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _show_coin_analysis_msg(update, context, "PAXGUSDT")
     elif text == "🥇 XAUT":
         await _show_coin_analysis_msg(update, context, "XAUTUSDT")
+    elif text == "🛢️ CL":
+        await _show_coin_analysis_msg(update, context, "CLUSDT")
     elif text == "🔍 Hozir Signal Ol":
         await _show_get_signals_msg(update, context)
     elif text == "📉 Statistika":
@@ -392,42 +401,56 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
     import logging
     _logger = logging.getLogger(__name__)
 
-    # PAXG/XAUT uchun futures'dan oldin spot candles fallback
-    SPOT_FALLBACK_SYMBOLS = {"PAXGUSDT", "XAUTUSDT"}
+    # Timeframe tartibida urinish
+    TF_LIST = ["1H", "4H"]
+
+    def _try_get_candles(sym: str, tf: str, limit: int = 150):
+        """Futures → Spot → Spot boshqa granularity — ketma-ket urinish."""
+        # 1. Futures
+        r = client.get_futures_candles(sym, tf, limit)
+        if r.get("code") == "00000" and r.get("data"):
+            return r.get("data", []), "futures"
+
+        # 2. Spot (PAXG, XAUT, CL kabi) — bir xil granularity
+        r2 = client.get_spot_candles(sym, tf, limit)
+        if r2.get("code") == "00000" and r2.get("data"):
+            return r2.get("data", []), "spot"
+
+        # 3. Spot — 1D timeframe (agar 1H/4H ishlamasa)
+        if tf != "1D":
+            r3 = client.get_spot_candles(sym, "1D", min(limit, 200))
+            if r3.get("code") == "00000" and r3.get("data"):
+                return r3.get("data", []), "spot_1D"
+
+        return [], "none"
 
     results = []
-    for tf in ["1H", "4H"]:
+    for tf in TF_LIST:
         try:
-            # Avval futures candles
-            candles = client.get_futures_candles(symbol, tf, 150)
-            code = candles.get("code")
-            data = candles.get("data", [])
-
-            # Agar futures xato yoki bo'sh bo'lsa — spot candles ishlatamiz
-            if (code != "00000" or not data) and symbol in SPOT_FALLBACK_SYMBOLS:
-                _logger.info(f"{symbol} {tf}: futures xato, spot candles urilyapti...")
-                spot_candles = client.get_spot_candles(symbol, tf, 150)
-                if spot_candles.get("code") == "00000" and spot_candles.get("data"):
-                    candles = spot_candles
-                    code = "00000"
-                    data = candles.get("data", [])
-                    _logger.info(f"{symbol} {tf}: spot candles muvaffaqiyatli ({len(data)} ta)")
-
-            if code == "00000" and data:
-                sig = analyze_symbol(data, symbol, tf)
-                if sig:
-                    results.append((tf, sig, data))
-                else:
-                    _logger.warning(f"{symbol} {tf}: analyze_symbol None qaytardi")
+            data, source = _try_get_candles(symbol, tf)
+            if not data:
+                _logger.warning(f"{symbol} {tf}: barcha urinishlar muvaffaqiyatsiz")
+                continue
+            actual_tf = "1D" if source == "spot_1D" else tf
+            _logger.info(f"{symbol} {actual_tf} ({source}): {len(data)} ta sham")
+            sig = analyze_symbol(data, symbol, actual_tf)
+            if sig:
+                results.append((actual_tf, sig, data))
             else:
-                _logger.warning(f"{symbol} {tf}: API xato code={code}")
+                _logger.warning(f"{symbol} {actual_tf}: signal aniqlanmadi (ma'lumot yetarli emas)")
         except Exception as e:
-            _logger.error(f"{symbol} {tf} candles xato: {e}")
+            _logger.error(f"{symbol} {tf} xato: {e}")
 
     if not results:
+        icon_map = {"PAXGUSDT": "💎 PAXG (Gold)", "XAUTUSDT": "🥇 XAUT (Gold)", "CLUSDT": "🛢️ CL (Crude Oil)"}
+        icon = icon_map.get(symbol, symbol)
         await send_fn(
-            f"❌ <b>{symbol} uchun ma'lumot olinmadi</b>\n"
-            f"<i>Bitget API javob bermadi yoki signal aniqlanmadi. Keyinroq qayta urining.</i>",
+            f"❌ <b>{icon} ma'lumoti olinmadi</b>\n\n"
+            f"Mumkin bo'lgan sabablar:\n"
+            f"• Bitget da bu symbol yo'q yoki cheklangan\n"
+            f"• API vaqtincha ishlamayapti\n"
+            f"• Yetarli candle ma'lumoti yo'q\n\n"
+            f"<i>Keyinroq qayta urining.</i>",
             parse_mode="HTML"
         )
         return

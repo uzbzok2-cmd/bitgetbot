@@ -267,47 +267,73 @@ def format_history(orders: list, period_label: str = "TARIX", trade_type: str = 
     total_fee = 0.0
     win_count = loss_count = 0
     lines = [f"📜 <b>{period_label}</b> ({len(orders)} ta)\n{'─'*28}"]
+
     for order in orders[:50]:
         if trade_type == "futures":
-            symbol = order.get("symbol", "")
-            side   = order.get("side", "")
-            price  = safe_float(order.get("price", order.get("fillPrice", 0)))
-            size   = safe_float(order.get("baseVolume", order.get("size", 0)))
-            pnl    = safe_float(order.get("profit", order.get("realizedPL", 0)))
-            fee    = safe_float(order.get("fee", 0))
-            ct     = order.get("cTime", order.get("fillTime", ""))
-            hold   = order.get("tradeSide", order.get("holdSide", ""))
+            symbol   = order.get("symbol", "")
+            side     = order.get("side", "")
+            price    = safe_float(order.get("fillPrice", order.get("price", 0)))
+            size     = safe_float(order.get("baseVolume", order.get("size", 0)))
+            pnl      = safe_float(order.get("profit", order.get("realizedPL", 0)))
+            fee      = safe_float(order.get("fee", 0))
+            ct       = order.get("cTime", order.get("fillTime", ""))
+            hold     = order.get("tradeSide", order.get("holdSide", ""))
+            leverage = safe_float(order.get("leverage", 0))
         else:
-            symbol = order.get("symbol", "")
-            side   = order.get("side", "")
-            price  = safe_float(order.get("fillPrice", order.get("priceAvg", 0)))
-            size   = safe_float(order.get("fillQuantity", order.get("size", 0)))
-            pnl    = safe_float(order.get("profit", 0))
-            fee    = safe_float(order.get("feeDetail", {}).get("totalFee", 0))
-            ct     = order.get("cTime", "")
-            hold   = side
+            symbol   = order.get("symbol", "")
+            side     = order.get("side", "")
+            price    = safe_float(order.get("fillPrice", order.get("priceAvg", 0)))
+            size     = safe_float(order.get("fillQuantity", order.get("size", 0)))
+            pnl      = safe_float(order.get("profit", 0))
+            fee      = safe_float(order.get("feeDetail", {}).get("totalFee", 0))
+            ct       = order.get("cTime", "")
+            hold     = side
+            leverage = 1.0
+
         net = pnl - abs(fee)
         total_pnl += net
         total_fee += abs(fee)
-        if net > 0:
-            win_count += 1; res = "✅ TP"
-        elif net < 0:
-            loss_count += 1; res = "❌ SL"
+
+        if net > 0.0001:
+            win_count += 1; res = "✅ FOYDA"
+        elif net < -0.0001:
+            loss_count += 1; res = "❌ ZARAR"
         else:
             res = "⚪ BEQ"
+
         side_str = "🟢 LONG" if "buy" in str(side).lower() or "long" in str(hold).lower() else "🔴 SHORT"
+
+        # PnL foiz hisoblash
+        pnl_pct_str = ""
+        if price > 0 and size > 0 and leverage > 1:
+            margin = (price * size) / leverage
+            if margin > 0:
+                pnl_pct = net / margin * 100
+                sign = "+" if pnl_pct >= 0 else ""
+                pnl_pct_str = f"  (<code>{sign}{pnl_pct:.1f}% ×{int(leverage)}x</code>)"
+        elif price > 0 and size > 0:
+            # Spot uchun oddiy foiz
+            position_val = price * size
+            if position_val > 0:
+                pnl_pct = net / position_val * 100
+                sign = "+" if pnl_pct >= 0 else ""
+                pnl_pct_str = f"  (<code>{sign}{pnl_pct:.2f}%</code>)"
+
         lines.append(
-            f"\n{pnl_emoji(net)} <b>{symbol}</b> {side_str} {res}\n"
+            f"\n{pnl_emoji(net)} <b>{symbol}</b>  {side_str}  {res}\n"
             f"📅 <code>{ts_to_date(ct)}</code>\n"
-            f"💲 <code>{fmt_price(price)}</code>  📦 <code>{size}</code>\n"
-            f"💰 Net: <code>{net:+.4f} USDT</code>  🏦 Fee: <code>-{abs(fee):.4f}</code>"
+            f"💲 Narx: <code>{fmt_price(price)}</code>  📦 <code>{size}</code>\n"
+            f"💰 <b>Net PnL: <code>{net:+.4f} USDT</code></b>{pnl_pct_str}\n"
+            f"🏦 Fee: <code>-{abs(fee):.4f} USDT</code>"
         )
+
     total = win_count + loss_count
     wr = (win_count / total * 100) if total > 0 else 0
+    pnl_pct_total = ""
     lines += [
-        f"\n{'─'*28}",
-        f"{pnl_emoji(total_pnl)} <b>Jami PnL:</b> <code>{total_pnl:+.4f} USDT</code>",
-        f"🏆 <b>Win Rate:</b> <code>{wr:.1f}%</code>  ({win_count}✅ / {loss_count}❌)",
+        f"\n{'═'*28}",
+        f"{pnl_emoji(total_pnl)} <b>JAMI NET PnL: <code>{total_pnl:+.4f} USDT</code></b>",
+        f"🏆 <b>Win Rate:</b> <code>{wr:.1f}%</code>  ✅{win_count} / ❌{loss_count}",
         f"🏦 <b>Jami Fee:</b> <code>-{total_fee:.4f} USDT</code>",
         f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>",
     ]
