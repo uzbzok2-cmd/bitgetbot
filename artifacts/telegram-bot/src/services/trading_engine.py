@@ -325,6 +325,15 @@ class TradingEngine:
         dir_   = signal["direction"]
         entry  = signal["entry"]
         atr    = signal.get("atr", entry * 0.02)
+
+        if entry <= 0:
+            return None, "Kirish narxi noto'g'ri (0)"
+
+        # ── Haqiqiy balansni ol ──────────────────────────────
+        balance = await self._futures_balance()
+        if balance <= 0:
+            return None, "Balans olinmadi, qayta urining"
+
         max_lev = await self._get_max_leverage(symbol)
 
         try:
@@ -334,8 +343,8 @@ class TradingEngine:
         except Exception:
             pass
 
-        commission = 0.0006 * 2   # taker fee × 2, leverage QUSHILMAYDI
-        atr_r = atr / entry
+        commission = 0.0006 * 2
+        atr_r = atr / entry if entry > 0 else 0.02
         if dir_ == "LONG":
             final_tp1 = round(entry * (1 + atr_r * 1.5 - commission), 8)
             final_sl  = round(entry * (1 - atr_r * 1.5 - commission), 8)
@@ -345,7 +354,6 @@ class TradingEngine:
             final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
             side = "sell"; hold_side = "short"
 
-        # Sanity-check: yo'nalishga qarab TP/SL to'g'ri tomondan bo'lishi shart
         if dir_ == "SHORT":
             if final_tp1 >= entry:
                 final_tp1 = round(entry * (1 - atr_r * 1.5), 8)
@@ -357,18 +365,50 @@ class TradingEngine:
             if final_sl >= entry:
                 final_sl  = round(entry * (1 - atr_r * 1.5), 8)
 
-        size = order_usdt * max_lev / entry
+        # ── Zocker TP/SL dan foydalanish (agar mavjud bo'lsa) ──
+        if signal.get("tp1") and signal.get("sl"):
+            ztp = signal["tp1"]; zsl = signal["sl"]
+            if dir_ == "LONG" and ztp > entry > zsl > 0:
+                final_tp1, final_sl = ztp, zsl
+            elif dir_ == "SHORT" and ztp < entry and zsl > entry:
+                final_tp1, final_sl = ztp, zsl
+
+        # ── Hajm hisoblash ──────────────────────────────────
+        # Foydalanuvchi kiritgan USDT miqdori asosida:
+        raw_size = order_usdt * max_lev / entry
+
+        min_size = 0.001
+        prec     = 4
         try:
             d = self.client.get_futures_contract_info(symbol)
             if d.get("code") == "00000":
                 contracts = d.get("data", [])
                 if contracts:
-                    c = contracts[0]
+                    c        = contracts[0]
                     min_size = safe_float(c.get("minTradeNum", 0.001))
-                    prec = len(str(min_size).split(".")[-1]) if "." in str(min_size) else 4
-                    size = max(min_size, round(size, prec))
+                    sz_str   = str(min_size)
+                    prec     = len(sz_str.split(".")[-1]) if "." in sz_str else 0
         except Exception:
-            size = round(size, 4)
+            pass
+
+        size = max(min_size, round(raw_size, prec))
+
+        # ── Haqiqiy marja tekshiruvi ────────────────────────
+        actual_margin = size * entry / max_lev
+        if actual_margin > balance * 0.98:
+            # Balansga mos maksimal hajmni hisoblash
+            max_size = (balance * 0.95 * max_lev) / entry
+            max_size = round(max_size, prec)
+            if max_size < min_size:
+                return None, (
+                    f"Balans yetarli emas.\n"
+                    f"• Minimal hajm uchun: <b>{actual_margin:.2f} USDT</b> kerak\n"
+                    f"• Mavjud balans: <b>{balance:.2f} USDT</b>"
+                )
+            # Balansga sig'adigan maksimal hajmdan foydalan
+            size          = max_size
+            actual_margin = size * entry / max_lev
+            logger.info(f"Manual trade: hajm balansga mos kamaytirildi → {size} ({actual_margin:.2f} USDT)")
 
         if size <= 0:
             return None, "Hajm 0 dan kichik"
