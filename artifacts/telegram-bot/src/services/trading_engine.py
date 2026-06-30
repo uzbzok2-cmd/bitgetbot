@@ -81,13 +81,40 @@ class TradingEngine:
         self.active_futures_signals: Dict = {}
 
     async def _futures_balance(self) -> float:
+        """Cross margin uchun haqiqiy ochiq pozitsiya uchun mavjud mablag'ni qaytaradi."""
         try:
             d = self.client.get_futures_account()
             if d.get("code") == "00000":
-                return safe_float(d["data"].get("available", 0))
+                data = d["data"]
+                crossed_max = safe_float(data.get("crossedMaxAvailable", -1))
+                available   = safe_float(data.get("available", 0))
+                # crossedMaxAvailable > 0 bo'lsa, uni ishlatamiz (Bitget'ning haqiqiy limiti)
+                if crossed_max > 0:
+                    return crossed_max
+                # crossedMaxAvailable = 0 bo'lsa, mavjud pozitsiyalar zarar ko'rmoqda
+                # available ni qaytaramiz (agar 0 bo'lsa, muammo bor)
+                return available
         except Exception as e:
             logger.error(f"Balance error: {e}")
         return 0.0
+
+    async def _futures_balance_info(self) -> dict:
+        """To'liq balans ma'lumoti — xabar ko'rsatish uchun."""
+        try:
+            d = self.client.get_futures_account()
+            if d.get("code") == "00000":
+                data = d["data"]
+                return {
+                    "available":       safe_float(data.get("available", 0)),
+                    "crossed_max":     safe_float(data.get("crossedMaxAvailable", 0)),
+                    "equity":          safe_float(data.get("accountEquity", 0)),
+                    "unrealized_pl":   safe_float(data.get("unrealizedPL", 0)),
+                    "crossed_risk":    safe_float(data.get("crossedRiskRate", 0)),
+                    "crossed_margin":  safe_float(data.get("crossedMargin", 0)),
+                }
+        except Exception:
+            pass
+        return {}
 
     async def _open_positions_count(self) -> int:
         try:
@@ -354,10 +381,26 @@ class TradingEngine:
         if entry <= 0:
             return None, "Kirish narxi noto'g'ri (0)"
 
-        # ── Haqiqiy balansni ol ──────────────────────────────
-        balance = await self._futures_balance()
-        if balance <= 0:
-            return None, "Balans olinmadi, qayta urining"
+        # ── Haqiqiy balansni ol (crossedMaxAvailable) ──────────
+        bal_info = await self._futures_balance_info()
+        balance  = await self._futures_balance()
+        if balance <= 0.5:
+            crossed_max = bal_info.get("crossed_max", 0)
+            equity      = bal_info.get("equity", 0)
+            unr_pl      = bal_info.get("unrealized_pl", 0)
+            risk        = bal_info.get("crossed_risk", 0) * 100
+            return None, (
+                f"⚠️ <b>Yangi pozitsiya uchun mablag' yo'q</b>\n\n"
+                f"📊 <b>Holat:</b>\n"
+                f"• Hisob kapitali: <b>{equity:.2f} USDT</b>\n"
+                f"• Unrealized PnL: <b>{unr_pl:+.2f} USDT</b>\n"
+                f"• Risk darajasi: <b>{risk:.1f}%</b>\n"
+                f"• Yangi pozitsiya limiti: <b>{crossed_max:.2f} USDT</b>\n\n"
+                f"💡 <b>Sabab:</b> Mavjud pozitsiyalar zarar ko'rmoqda.\n"
+                f"Yangi pozitsiya ochish uchun:\n"
+                f"• Ba'zi ochiq pozitsiyalarni yoping\n"
+                f"• Yoki hisobga USDT qo'shing"
+            )
 
         max_lev = await self._get_max_leverage(symbol)
         # Leverage o'rnat va haqiqiy qiymatni tasdiqla (cross margin uchun to'g'ri yo'l)
