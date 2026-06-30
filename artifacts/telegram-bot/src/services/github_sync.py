@@ -64,22 +64,22 @@ def commit_and_push(message: str = None):
     # Check if there's anything to commit
     code, out, _ = run(["git", "diff", "--cached", "--quiet"], cwd=str(workspace))
     if code == 0:
-        logger.info("Nothing to commit")
-        return True
+        logger.info("Nothing new to commit — pushing existing commits to GitHub...")
+    else:
+        # Commit new changes
+        code, out, err = run(["git", "commit", "-m", msg], cwd=str(workspace))
+        if code != 0:
+            logger.error(f"Git commit failed: {err}")
+            return False
+        logger.info(f"✅ Committed: {msg}")
 
-    # Commit
-    code, out, err = run(["git", "commit", "-m", msg], cwd=str(workspace))
-    if code != 0:
-        logger.error(f"Git commit failed: {err}")
-        return False
-
-    # Push
+    # Always push (even if nothing new to commit — existing commits may not be on remote)
     code, out, err = run(["git", "push", "github", "HEAD:main", "--force"], cwd=str(workspace))
     if code != 0:
         logger.warning(f"Git push failed: {err}")
         return False
 
-    logger.info(f"✅ Committed and pushed: {msg}")
+    logger.info(f"✅ Pushed to GitHub: {msg}")
     return True
 
 
