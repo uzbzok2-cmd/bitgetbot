@@ -309,9 +309,15 @@ class ZockerScanner:
             if acc.get("code") != "00000":
                 logger.warning("Zocker auto-trade: balans olinmadi")
                 return
-            balance = safe_float(acc["data"].get("available", 0))
+            acc_data = acc["data"]
+            # crossedMaxAvailable — Bitget'ning haqiqiy cross margin limiti (0=yangi pozitsiya yo'q)
+            crossed_max = safe_float(acc_data.get("crossedMaxAvailable", -1))
+            if crossed_max >= 0:
+                balance = crossed_max  # haqiqiy limit
+            else:
+                balance = safe_float(acc_data.get("available", 0))  # fallback
             if balance < 1.0:
-                logger.warning(f"Zocker auto-trade: balans kam ({balance:.2f})")
+                logger.warning(f"Zocker auto-trade: crossedMaxAvailable kam ({balance:.2f})")
                 return
 
             from config import MIN_ORDER_USDT, MAX_ORDER_USDT
@@ -369,8 +375,23 @@ class ZockerScanner:
 
             gs.scanner.add_log(f"✅ Zocker savdo: {symbol} {direction} {max_lev}x")
 
-            _place_tp_sl(self.client, symbol, "profit_loss", tp, hold_side, size)
-            _place_tp_sl(self.client, symbol, "loss_plan",   sl, hold_side, size)
+            # TP MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
+            tp_ok, _ = _place_tp_sl(self.client, symbol, "profit_loss", tp, hold_side, size)
+            if not tp_ok:
+                logger.error(f"❌ Zocker {symbol} TP qo'yilmadi — ROLLBACK")
+                gs.scanner.add_log(f"❌ Zocker {symbol} TP fail → rollback")
+                self.client.close_futures_position(symbol, hold_side)
+                return
+
+            # SL MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
+            sl_ok, _ = _place_tp_sl(self.client, symbol, "loss_plan", sl, hold_side, size)
+            if not sl_ok:
+                logger.error(f"❌ Zocker {symbol} SL qo'yilmadi — ROLLBACK")
+                gs.scanner.add_log(f"❌ Zocker {symbol} SL fail → rollback")
+                self.client.close_futures_position(symbol, hold_side)
+                return
+
+            logger.info(f"✅ Zocker {symbol} TP={tp} SL={sl} — muvaffaqiyatli")
 
             if self.bot and gs.notifier_chat_id:
                 color_txt = "yashil" if direction == "SHORT" else "qizil"

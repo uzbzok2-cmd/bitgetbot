@@ -81,18 +81,21 @@ class TradingEngine:
         self.active_futures_signals: Dict = {}
 
     async def _futures_balance(self) -> float:
-        """Cross margin uchun haqiqiy ochiq pozitsiya uchun mavjud mablag'ni qaytaradi."""
+        """Cross margin uchun haqiqiy yangi pozitsiya uchun mavjud mablag'.
+        crossedMaxAvailable = Bitget'ning HAQIQIY ruxsat beradigan limiti.
+        0 = yangi pozitsiya uchun joy yo'q (mavjud pozitsiyalar zarar ko'rmoqda).
+        """
         try:
             d = self.client.get_futures_account()
             if d.get("code") == "00000":
                 data = d["data"]
+                # -1 = maydon mavjud emas (eski API), >= 0 = haqiqiy qiymat
                 crossed_max = safe_float(data.get("crossedMaxAvailable", -1))
                 available   = safe_float(data.get("available", 0))
-                # crossedMaxAvailable > 0 bo'lsa, uni ishlatamiz (Bitget'ning haqiqiy limiti)
-                if crossed_max > 0:
+                if crossed_max >= 0:
+                    # 0 ham qaytaramiz — bu "yangi pozitsiya ochib bo'lmaydi" degan ma'no
                     return crossed_max
-                # crossedMaxAvailable = 0 bo'lsa, mavjud pozitsiyalar zarar ko'rmoqda
-                # available ni qaytaramiz (agar 0 bo'lsa, muammo bor)
+                # Maydon mavjud emas — available orqali fallback
                 return available
         except Exception as e:
             logger.error(f"Balance error: {e}")
@@ -332,15 +335,27 @@ class TradingEngine:
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
 
-        # TP1 = 100% of position, SL = 100%
-        for plan_type, trig, sz in [
-            ("profit_loss", final_tp1, size),
-            ("loss_plan",   final_sl,  size),
-        ]:
-            try:
-                _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
-            except Exception as e:
-                logger.error(f"TP/SL error {symbol}: {e}")
+        # TP qo'y — muvaffaqiyatsiz bo'lsa pozitsiyani yop
+        tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "profit_loss", final_tp1, hold_side, size)
+        if not tp_ok:
+            logger.error(f"❌ {symbol} TP qo'yilmadi — pozitsiya YOPILMOQDA")
+            gs.scanner.add_log(f"❌ {symbol} TP fail → rollback")
+            self.client.close_futures_position(symbol, hold_side)
+            self.active_futures_signals.pop(symbol, None)
+            gs.scanner.active_trades.pop(symbol, None)
+            return
+
+        # SL qo'y — muvaffaqiyatsiz bo'lsa TP ni bekor qil va pozitsiyani yop
+        sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "loss_plan", final_sl, hold_side, size)
+        if not sl_ok:
+            logger.error(f"❌ {symbol} SL qo'yilmadi — pozitsiya YOPILMOQDA")
+            gs.scanner.add_log(f"❌ {symbol} SL fail → rollback")
+            self.client.close_futures_position(symbol, hold_side)
+            self.active_futures_signals.pop(symbol, None)
+            gs.scanner.active_trades.pop(symbol, None)
+            return
+
+        logger.info(f"✅ {symbol} TP={final_tp1} SL={final_sl} qo'yildi")
 
         if self.bot and gs.notifier_chat_id:
             from utils.formatters import format_auto_trade_notify
@@ -493,28 +508,57 @@ class TradingEngine:
         )
         if result.get("code") != "00000":
             err_msg = result.get("msg", "Order xatosi")
-            # "exceeds balance" → aniqroq xabar ko'rsat
-            if "balance" in err_msg.lower() or "exceed" in err_msg.lower():
+            err_lower = err_msg.lower()
+            # crossedMaxAvailable=0 yoki "exceeds balance" xatosi
+            if "balance" in err_lower or "exceed" in err_lower or "40762" in str(result.get("code", "")):
+                bal_info2 = await self._futures_balance_info()
+                crossed   = bal_info2.get("crossed_max", 0)
+                equity2   = bal_info2.get("equity", 0)
+                unr2      = bal_info2.get("unrealized_pl", 0)
+                risk2     = bal_info2.get("crossed_risk", 0) * 100
                 return None, (
-                    f"⚠️ Marja yetarli emas.\n"
-                    f"• Zarur: <b>{actual_margin:.2f} USDT</b>\n"
-                    f"• Mavjud: <b>{balance:.2f} USDT</b>\n"
-                    f"• Minimal: <b>{math.ceil(min_margin_needed)} USDT</b> kiriting."
+                    f"❌ <b>Order rad etildi (Bitget)</b>\n\n"
+                    f"📊 <b>Hisob holati:</b>\n"
+                    f"• Kapital: <b>{equity2:.2f} USDT</b>\n"
+                    f"• Unrealized PnL: <b>{unr2:+.2f} USDT</b>\n"
+                    f"• Risk darajasi: <b>{risk2:.1f}%</b>\n"
+                    f"• Yangi pozitsiya limiti (crossedMaxAvailable): <b>{crossed:.2f} USDT</b>\n\n"
+                    f"💡 <b>Sabab:</b> Mavjud ochiq pozitsiyalar zarar ko'rmoqda,\n"
+                    f"Bitget cross margin yangi pozitsiya ochishga ruxsat bermayapti.\n\n"
+                    f"<b>Yechim:</b>\n"
+                    f"• Zarar ko'rayotgan pozitsiyalarni yoping\n"
+                    f"• Yoki hisobga ko'proq USDT qo'shing"
                 )
-            return None, err_msg
+            return None, f"❌ {err_msg}"
 
         order_id = result.get("data", {}).get("orderId", "")
+        logger.info(f"✅ Manual order: {symbol} {dir_} {size} @ {confirmed_lev}x — TP/SL qo'yilmoqda...")
 
-        # TP1 = 100% position, SL = 100%
+        # TP va SL MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
         if symbol not in SKIP_TP_SL_SYMBOLS:
-            for plan_type, trig, sz in [
-                ("profit_loss", final_tp1, size),
-                ("loss_plan",   final_sl,  size),
-            ]:
-                try:
-                    _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
-                except Exception as e:
-                    logger.error(f"Manual TP/SL error {symbol}: {e}")
+            tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "profit_loss", final_tp1, hold_side, size)
+            if not tp_ok:
+                logger.error(f"❌ Manual {symbol} TP qo'yilmadi — ROLLBACK")
+                self.client.close_futures_position(symbol, hold_side)
+                return None, (
+                    f"❌ <b>TP qo'yilmadi — pozitsiya BEKOR QILINDI</b>\n\n"
+                    f"• {symbol} {dir_} pozitsiyasi avtomatik yopildi\n"
+                    f"• Sabab: TP order Bitget tomonidan rad etildi\n"
+                    f"• Keyinroq qayta urining"
+                )
+
+            sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "loss_plan", final_sl, hold_side, size)
+            if not sl_ok:
+                logger.error(f"❌ Manual {symbol} SL qo'yilmadi — ROLLBACK")
+                self.client.close_futures_position(symbol, hold_side)
+                return None, (
+                    f"❌ <b>SL qo'yilmadi — pozitsiya BEKOR QILINDI</b>\n\n"
+                    f"• {symbol} {dir_} pozitsiyasi avtomatik yopildi\n"
+                    f"• Sabab: SL order Bitget tomonidan rad etildi\n"
+                    f"• Keyinroq qayta urining"
+                )
+
+            logger.info(f"✅ Manual {symbol} TP={final_tp1} SL={final_sl} — muvaffaqiyatli")
 
         trade_info = {
             "symbol": symbol, "direction": dir_,

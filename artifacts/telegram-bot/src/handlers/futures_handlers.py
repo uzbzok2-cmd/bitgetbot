@@ -76,6 +76,8 @@ async def handle_futures_positions(update: Update, context: ContextTypes.DEFAULT
     pos_data  = client.get_futures_positions()
     plan_data = client.get_futures_plan_orders()
 
+    # plan_map: symbol-holdSide (exact) AND symbol (fallback when holdSide is empty)
+    # Root cause of "TP: Qo'yilmagan": Bitget returns holdSide="" in plan orders → key mismatch
     plan_map: dict = {}
     if plan_data.get("code") == "00000":
         plan_list = plan_data.get("data") or []
@@ -84,8 +86,13 @@ async def handle_futures_positions(update: Update, context: ContextTypes.DEFAULT
         if not isinstance(plan_list, list):
             plan_list = []
         for p in plan_list:
-            key = f"{p.get('symbol','')}-{p.get('holdSide','')}"
-            plan_map.setdefault(key, []).append(p)
+            sym = p.get("symbol", "")
+            hs  = (p.get("holdSide") or "").lower().strip()
+            # 1. Exact key: symbol-holdSide (when holdSide is present)
+            if hs:
+                plan_map.setdefault(f"{sym}-{hs}", []).append(p)
+            # 2. Symbol-only fallback key (when holdSide is empty or missing)
+            plan_map.setdefault(sym, []).append(p)
 
     funding_rates = {}
     if pos_data.get("code") == "00000":
@@ -145,15 +152,24 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
         time_str = datetime.fromtimestamp(int(c_time)/1000, tz=timezone.utc).strftime("%m/%d %H:%M") if c_time else "—"
         mark_pct_str = _pct_lev(mark_price, avg_price, leverage) if avg_price > 0 else ""
 
-        key = f"{symbol}-{hold_side}"
-        plans = plan_map.get(key, [])
+        # Robust plan lookup: exact key (symbol-holdSide) first, then symbol-only fallback
+        exact_key = f"{symbol}-{hold_side}"
+        plans = plan_map.get(exact_key) or plan_map.get(symbol, [])
+        # Filter: if using symbol-only fallback, match by holdSide where possible
         tps, sls = [], []
         for p in plans:
-            pt   = p.get("planType", "")
-            trig = safe_float(p.get("triggerPrice", 0))
-            if "profit" in pt and trig > 0:
+            pt    = (p.get("planType") or "").lower()
+            trig  = safe_float(p.get("triggerPrice", 0))
+            p_hs  = (p.get("holdSide") or "").lower().strip()
+            # Skip if holdSide explicitly mismatches
+            if p_hs and p_hs != hold_side:
+                continue
+            if trig <= 0:
+                continue
+            # profit_loss = TP, loss_plan = SL
+            if "profit" in pt:
                 tps.append(trig)
-            elif "loss" in pt and trig > 0:
+            elif pt == "loss_plan" or (pt.startswith("loss") and "profit" not in pt):
                 sls.append(trig)
 
         lines.append(
