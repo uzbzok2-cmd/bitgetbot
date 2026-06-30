@@ -266,7 +266,7 @@ class TradingEngine:
             if final_sl >= entry:
                 final_sl  = round(entry * (1 - atr_r * 1.5), 8)
 
-        size = order_usdt * max_lev / entry
+        size = order_usdt * confirmed_lev / entry
         try:
             d = self.client.get_futures_contract_info(symbol)
             if d.get("code") == "00000":
@@ -292,15 +292,15 @@ class TradingEngine:
             return
 
         order_id = result.get("data", {}).get("orderId", "")
-        logger.info(f"✅ Order: {symbol} {dir_} {size} @ {max_lev}x")
-        gs.scanner.add_log(f"✅ Savdo: {symbol} {dir_} {max_lev}x")
+        logger.info(f"✅ Order: {symbol} {dir_} {size} @ {confirmed_lev}x")
+        gs.scanner.add_log(f"✅ Savdo: {symbol} {dir_} {confirmed_lev}x")
 
         self.active_futures_signals[symbol] = {
-            "signal": signal, "order_id": order_id, "leverage": max_lev,
+            "signal": signal, "order_id": order_id, "leverage": confirmed_lev,
             "size": size, "margin": order_usdt, "open_time": int(time.time())
         }
         gs.scanner.active_trades[symbol] = {
-            "symbol": symbol, "direction": dir_, "leverage": max_lev,
+            "symbol": symbol, "direction": dir_, "leverage": confirmed_lev,
             "size": size, "margin": order_usdt, "entry": entry,
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
@@ -409,29 +409,27 @@ class TradingEngine:
         except Exception:
             pass
 
-        # ── Minimal marja tekshiruvi ────────────────────────
-        # 1 minimal kontrakt nechchi USDT marja talab qiladi?
-        min_margin_needed = min_size * entry / max_lev
+        # ── Minimal marja tekshiruvi (confirmed_lev bilan) ─────────────
+        min_margin_needed = min_size * entry / confirmed_lev
         if order_usdt < min_margin_needed * 0.99:
             return None, (
                 f"⚠️ <b>{symbol}</b> uchun minimal savdo:\n"
-                f"• 1 kontrakt = <b>{min_margin_needed:.2f} USDT</b> marja\n"
+                f"• 1 kontrakt = <b>{min_margin_needed:.4f} USDT</b> marja ({confirmed_lev}x leverage)\n"
                 f"• Siz kiritdingiz: <b>{order_usdt:.2f} USDT</b>\n\n"
                 f"Kamida <b>{math.ceil(min_margin_needed)}</b> USDT kiriting."
             )
 
-        # ── Hajm hisoblash (floor — hech qachon balansdan oshmasin) ─
-        raw_size  = order_usdt * max_lev / entry
-        lots      = max(1, math.floor(raw_size / min_size))   # butun "lot" soni
-        size      = lots * min_size                            # aniq lot × min_size
+        # ── Hajm hisoblash — confirmed_lev ishlatamiz ───────────────────
+        raw_size  = order_usdt * confirmed_lev / entry
+        lots      = max(1, math.floor(raw_size / min_size))
+        size      = lots * min_size
 
-        # ── Balans tekshiruvi ───────────────────────────────
-        actual_margin = size * entry / max_lev
+        # ── Balans tekshiruvi ───────────────────────────────────────────
+        actual_margin = size * entry / confirmed_lev
         if actual_margin > balance * 0.90:
-            # Kamroq lot ishlatish
-            lots = max(1, math.floor(balance * 0.85 * max_lev / entry / min_size))
+            lots = max(1, math.floor(balance * 0.85 * confirmed_lev / entry / min_size))
             size = lots * min_size
-            actual_margin = size * entry / max_lev
+            actual_margin = size * entry / confirmed_lev
             if actual_margin > balance * 0.90:
                 return None, (
                     f"⚠️ Balans yetarli emas.\n"
@@ -444,7 +442,7 @@ class TradingEngine:
         if size <= 0:
             return None, "Hajm 0 dan kichik"
 
-        logger.info(f"Manual trade: {symbol} {dir_} size={size} margin={actual_margin:.2f} balance={balance:.2f}")
+        logger.info(f"Manual trade: {symbol} {dir_} size={size} lev={confirmed_lev}x margin={actual_margin:.2f} balance={balance:.2f}")
 
         result = self.client.place_futures_order(
             symbol=symbol, side=side, trade_side="open",

@@ -326,17 +326,26 @@ class ZockerScanner:
             except Exception:
                 pass
 
+            # Cross margin uchun to'g'ri leverage o'rnatish va tasdiqlash
+            confirmed_lev = max_lev
             try:
                 self.client.set_margin_mode(symbol, "crossed")
-                self.client.set_leverage(symbol, max_lev, hold_side="long")
-                self.client.set_leverage(symbol, max_lev, hold_side="short")
-            except Exception:
-                pass
+                r = self.client.set_leverage_cross(symbol, max_lev)
+                if r.get("code") != "00000":
+                    self.client.set_leverage(symbol, max_lev, hold_side="long")
+                    self.client.set_leverage(symbol, max_lev, hold_side="short")
+                sym_acc = self.client.get_futures_symbol_account(symbol)
+                if sym_acc.get("code") == "00000":
+                    lev_val = int(safe_float(sym_acc["data"].get("leverage", max_lev)))
+                    if lev_val > 0:
+                        confirmed_lev = lev_val
+            except Exception as e:
+                logger.warning(f"Zocker leverage set error {symbol}: {e}")
 
             side      = "sell" if direction == "SHORT" else "buy"
             hold_side = "short" if direction == "SHORT" else "long"
 
-            size = order_usdt * max_lev / entry
+            size = order_usdt * confirmed_lev / entry
             try:
                 d = self.client.get_futures_contract_info(symbol)
                 if d.get("code") == "00000":
