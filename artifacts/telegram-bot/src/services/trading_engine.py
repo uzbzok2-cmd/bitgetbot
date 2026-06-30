@@ -373,10 +373,8 @@ class TradingEngine:
             elif dir_ == "SHORT" and ztp < entry and zsl > entry:
                 final_tp1, final_sl = ztp, zsl
 
-        # ── Hajm hisoblash ──────────────────────────────────
-        # Foydalanuvchi kiritgan USDT miqdori asosida:
-        raw_size = order_usdt * max_lev / entry
-
+        # ── Kontrakt ma'lumotlarini ol ───────────────────────
+        import math
         min_size = 0.001
         prec     = 4
         try:
@@ -391,34 +389,58 @@ class TradingEngine:
         except Exception:
             pass
 
-        size = max(min_size, round(raw_size, prec))
+        # ── Minimal marja tekshiruvi ────────────────────────
+        # 1 minimal kontrakt nechchi USDT marja talab qiladi?
+        min_margin_needed = min_size * entry / max_lev
+        if order_usdt < min_margin_needed * 0.99:
+            return None, (
+                f"⚠️ <b>{symbol}</b> uchun minimal savdo:\n"
+                f"• 1 kontrakt = <b>{min_margin_needed:.2f} USDT</b> marja\n"
+                f"• Siz kiritdingiz: <b>{order_usdt:.2f} USDT</b>\n\n"
+                f"Kamida <b>{math.ceil(min_margin_needed)}</b> USDT kiriting."
+            )
 
-        # ── Haqiqiy marja tekshiruvi ────────────────────────
+        # ── Hajm hisoblash (floor — hech qachon balansdan oshmasin) ─
+        raw_size  = order_usdt * max_lev / entry
+        lots      = max(1, math.floor(raw_size / min_size))   # butun "lot" soni
+        size      = lots * min_size                            # aniq lot × min_size
+
+        # ── Balans tekshiruvi ───────────────────────────────
         actual_margin = size * entry / max_lev
-        if actual_margin > balance * 0.98:
-            # Balansga mos maksimal hajmni hisoblash
-            max_size = (balance * 0.95 * max_lev) / entry
-            max_size = round(max_size, prec)
-            if max_size < min_size:
-                return None, (
-                    f"Balans yetarli emas.\n"
-                    f"• Minimal hajm uchun: <b>{actual_margin:.2f} USDT</b> kerak\n"
-                    f"• Mavjud balans: <b>{balance:.2f} USDT</b>"
-                )
-            # Balansga sig'adigan maksimal hajmdan foydalan
-            size          = max_size
+        if actual_margin > balance * 0.90:
+            # Kamroq lot ishlatish
+            lots = max(1, math.floor(balance * 0.85 * max_lev / entry / min_size))
+            size = lots * min_size
             actual_margin = size * entry / max_lev
-            logger.info(f"Manual trade: hajm balansga mos kamaytirildi → {size} ({actual_margin:.2f} USDT)")
+            if actual_margin > balance * 0.90:
+                return None, (
+                    f"⚠️ Balans yetarli emas.\n"
+                    f"• Kerakli marja: <b>{actual_margin:.2f} USDT</b>\n"
+                    f"• Mavjud balans: <b>{balance:.2f} USDT</b>\n\n"
+                    f"Kamida <b>{math.ceil(min_margin_needed)}</b> USDT kerak."
+                )
+            logger.info(f"Manual trade: lots kamaytirildi → {lots} ({actual_margin:.2f} USDT)")
 
         if size <= 0:
             return None, "Hajm 0 dan kichik"
+
+        logger.info(f"Manual trade: {symbol} {dir_} size={size} margin={actual_margin:.2f} balance={balance:.2f}")
 
         result = self.client.place_futures_order(
             symbol=symbol, side=side, trade_side="open",
             size=str(size), order_type="market"
         )
         if result.get("code") != "00000":
-            return None, result.get("msg", "Order xatosi")
+            err_msg = result.get("msg", "Order xatosi")
+            # "exceeds balance" → aniqroq xabar ko'rsat
+            if "balance" in err_msg.lower() or "exceed" in err_msg.lower():
+                return None, (
+                    f"⚠️ Marja yetarli emas.\n"
+                    f"• Zarur: <b>{actual_margin:.2f} USDT</b>\n"
+                    f"• Mavjud: <b>{balance:.2f} USDT</b>\n"
+                    f"• Minimal: <b>{math.ceil(min_margin_needed)} USDT</b> kiriting."
+                )
+            return None, err_msg
 
         order_id = result.get("data", {}).get("orderId", "")
 
