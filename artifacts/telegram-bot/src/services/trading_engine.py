@@ -107,6 +107,37 @@ class TradingEngine:
             pass
         return 20
 
+    async def _set_and_confirm_leverage(self, symbol: str, target_lev: int) -> int:
+        """Leverage o'rnatib, haqiqiy qiymatini tasdiqlaydi. Cross margin uchun to'g'ri ishlaydi."""
+        # 1. Margin mode = cross
+        try:
+            self.client.set_margin_mode(symbol, "crossed")
+        except Exception:
+            pass
+
+        # 2. Cross margin: holdSide-siz (Bitget cross uchun to'g'ri yo'l)
+        r = self.client.set_leverage_cross(symbol, target_lev)
+        if r.get("code") == "00000":
+            logger.info(f"✅ Leverage cross set: {symbol} {target_lev}x")
+        else:
+            # 3. Fallback: holdSide bilan (isolated uslubida)
+            r1 = self.client.set_leverage(symbol, target_lev, hold_side="long")
+            r2 = self.client.set_leverage(symbol, target_lev, hold_side="short")
+            logger.info(f"Leverage holdSide: {symbol} long={r1.get('code')} short={r2.get('code')}")
+
+        # 4. Tasdiqlash — haqiqiy leverage'ni o'qiymiz
+        try:
+            sym_acc = self.client.get_futures_symbol_account(symbol)
+            if sym_acc.get("code") == "00000":
+                confirmed = int(safe_float(sym_acc["data"].get("leverage", target_lev)))
+                if confirmed > 0:
+                    logger.info(f"✅ Confirmed leverage {symbol}: {confirmed}x")
+                    return confirmed
+        except Exception as e:
+            logger.warning(f"Leverage confirm error {symbol}: {e}")
+
+        return target_lev  # tasdiqlash muvaffaqiyatsiz bo'lsa, target'ni ishlatamiz
+
     async def _top_futures_symbols(self, n: int = 30) -> List[str]:
         try:
             d = self.client.get_futures_tickers()
@@ -210,13 +241,7 @@ class TradingEngine:
         entry  = signal["entry"]
         atr    = signal["atr"]
         max_lev = await self._get_max_leverage(symbol)
-
-        try:
-            self.client.set_margin_mode(symbol, "crossed")
-            self.client.set_leverage(symbol, max_lev, hold_side="long")
-            self.client.set_leverage(symbol, max_lev, hold_side="short")
-        except Exception:
-            pass
+        confirmed_lev = await self._set_and_confirm_leverage(symbol, max_lev)
 
         commission = 0.0006 * 2   # taker fee × 2 (ochish + yopish), leverage QUSHILMAYDI
         atr_r = atr / entry
@@ -335,13 +360,8 @@ class TradingEngine:
             return None, "Balans olinmadi, qayta urining"
 
         max_lev = await self._get_max_leverage(symbol)
-
-        try:
-            self.client.set_margin_mode(symbol, "crossed")
-            self.client.set_leverage(symbol, max_lev, hold_side="long")
-            self.client.set_leverage(symbol, max_lev, hold_side="short")
-        except Exception:
-            pass
+        # Leverage o'rnat va haqiqiy qiymatni tasdiqla (cross margin uchun to'g'ri yo'l)
+        confirmed_lev = await self._set_and_confirm_leverage(symbol, max_lev)
 
         commission = 0.0006 * 2
         atr_r = atr / entry if entry > 0 else 0.02

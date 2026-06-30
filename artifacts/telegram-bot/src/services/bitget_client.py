@@ -159,6 +159,23 @@ class BitgetClient:
             "productType": product_type
         })
 
+    def get_futures_symbol_account(self, symbol: str, product_type: str = "USDT-FUTURES", margin_coin: str = "USDT") -> dict:
+        """Per-symbol account ma'lumoti — hozirgi leverage, margin va boshqalar."""
+        return self._get("/api/v2/mix/account/account", {
+            "symbol": symbol,
+            "productType": product_type,
+            "marginCoin": margin_coin
+        })
+
+    def set_leverage_cross(self, symbol: str, leverage: int, product_type: str = "USDT-FUTURES", margin_coin: str = "USDT") -> dict:
+        """Cross margin uchun leverage — holdSide parametrisiz."""
+        return self._post("/api/v2/mix/account/set-leverage", {
+            "symbol": symbol,
+            "productType": product_type,
+            "marginCoin": margin_coin,
+            "leverage": str(leverage)
+        })
+
     def get_futures_contract_info(self, symbol: str, product_type: str = "USDT-FUTURES") -> dict:
         return self._get("/api/v2/mix/market/contracts", {
             "symbol": symbol,
