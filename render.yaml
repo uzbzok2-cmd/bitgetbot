@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: bitgetbot
+    env: python
+    plan: free
+    buildCommand: pip install -r artifacts/telegram-bot/requirements.txt
+    startCommand: python artifacts/telegram-bot/src/bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: BITGET_API_KEY
+        sync: false
+      - key: BITGET_API_SECRET
+        sync: false
+      - key: BITGET_API_PASSPHRASE
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_USERNAME
+        sync: false
+      - key: BOT_PASSWORD
+        sync: false

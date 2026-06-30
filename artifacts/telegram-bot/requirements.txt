@@ -1,0 +1,4 @@
+python-telegram-bot[all]==22.8.0
+requests>=2.31.0
+numpy>=1.24.0
+matplotlib>=3.7.0
