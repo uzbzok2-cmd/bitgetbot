@@ -29,8 +29,8 @@ PRIORITY_SYMBOLS = [
     "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LTCUSDT", "DOTUSDT",
 ]
 
-# Bu symbollar uchun TP/SL qo'yilmaydi
-SKIP_TP_SL_SYMBOLS = {"PAXGUSDT", "XAUTUSDT", "BGBUSDT"}
+# Bu symbollar uchun TP/SL qo'yilmaydi (faqat BGB cheklangan)
+SKIP_TP_SL_SYMBOLS = {"BGBUSDT"}
 
 
 def _price_scale(price: float) -> int:
@@ -218,7 +218,7 @@ class TradingEngine:
         except Exception:
             pass
 
-        commission = 0.0006 * 2 * max_lev
+        commission = 0.0006 * 2   # taker fee × 2 (ochish + yopish), leverage QUSHILMAYDI
         atr_r = atr / entry
         if dir_ == "LONG":
             final_tp1 = round(entry * (1 + atr_r * 1.5 - commission), 8)
@@ -228,6 +228,18 @@ class TradingEngine:
             final_tp1 = round(entry * (1 - atr_r * 1.5 + commission), 8)
             final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
             side = "sell"; hold_side = "short"
+
+        # Sanity-check: SHORT uchun TP entry dan past, SL yuqori bo'lishi shart
+        if dir_ == "SHORT":
+            if final_tp1 >= entry:
+                final_tp1 = round(entry * (1 - atr_r * 1.5), 8)
+            if final_sl <= entry:
+                final_sl  = round(entry * (1 + atr_r * 1.5), 8)
+        else:
+            if final_tp1 <= entry:
+                final_tp1 = round(entry * (1 + atr_r * 1.5), 8)
+            if final_sl >= entry:
+                final_sl  = round(entry * (1 - atr_r * 1.5), 8)
 
         size = order_usdt * max_lev / entry
         try:
@@ -322,7 +334,7 @@ class TradingEngine:
         except Exception:
             pass
 
-        commission = 0.0006 * 2 * max_lev
+        commission = 0.0006 * 2   # taker fee × 2, leverage QUSHILMAYDI
         atr_r = atr / entry
         if dir_ == "LONG":
             final_tp1 = round(entry * (1 + atr_r * 1.5 - commission), 8)
@@ -332,6 +344,18 @@ class TradingEngine:
             final_tp1 = round(entry * (1 - atr_r * 1.5 + commission), 8)
             final_sl  = round(entry * (1 + atr_r * 1.5 + commission), 8)
             side = "sell"; hold_side = "short"
+
+        # Sanity-check: yo'nalishga qarab TP/SL to'g'ri tomondan bo'lishi shart
+        if dir_ == "SHORT":
+            if final_tp1 >= entry:
+                final_tp1 = round(entry * (1 - atr_r * 1.5), 8)
+            if final_sl <= entry:
+                final_sl  = round(entry * (1 + atr_r * 1.5), 8)
+        else:
+            if final_tp1 <= entry:
+                final_tp1 = round(entry * (1 + atr_r * 1.5), 8)
+            if final_sl >= entry:
+                final_sl  = round(entry * (1 - atr_r * 1.5), 8)
 
         size = order_usdt * max_lev / entry
         try:
@@ -451,14 +475,18 @@ class TradingEngine:
                             atr = avg_price * 0.02
 
                     atr_r = atr / avg_price
-                    commission = 0.0006 * 2
+                    commission = 0.0006 * 2  # taker fee × 2, leverage QUSHILMAYDI
                     price_scale = _price_scale(avg_price)
                     if direction == "LONG":
                         tp1 = round(avg_price * (1 + atr_r * 1.5 - commission), price_scale)
                         sl  = round(avg_price * (1 - atr_r * 1.5 - commission), price_scale)
+                        if tp1 <= avg_price: tp1 = round(avg_price * (1 + atr_r * 1.5), price_scale)
+                        if sl  >= avg_price: sl  = round(avg_price * (1 - atr_r * 1.5), price_scale)
                     else:
                         tp1 = round(avg_price * (1 - atr_r * 1.5 + commission), price_scale)
                         sl  = round(avg_price * (1 + atr_r * 1.5 + commission), price_scale)
+                        if tp1 >= avg_price: tp1 = round(avg_price * (1 - atr_r * 1.5), price_scale)
+                        if sl  <= avg_price: sl  = round(avg_price * (1 + atr_r * 1.5), price_scale)
 
                     # TP1 = 100%, SL = 100%
                     success = True

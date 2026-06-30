@@ -405,22 +405,29 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
     TF_LIST = ["1H", "4H"]
 
     def _try_get_candles(sym: str, tf: str, limit: int = 150):
-        """Futures → Spot → Spot boshqa granularity — ketma-ket urinish."""
-        # 1. Futures
+        """Futures (har xil productType) → Spot → Spot 1D — ketma-ket urinish."""
+        # 1. Commodity symbollar uchun barcha productType larni sinab ko'ramiz
+        if sym in COMMODITY_SYMBOLS:
+            r = client.get_candles_any_type(sym, tf, limit)
+            if r.get("code") == "00000" and r.get("data"):
+                return r.get("data", []), "futures_commodity"
+
+        # 2. Oddiy USDT-FUTURES
         r = client.get_futures_candles(sym, tf, limit)
         if r.get("code") == "00000" and r.get("data"):
             return r.get("data", []), "futures"
 
-        # 2. Spot (PAXG, XAUT, CL kabi) — bir xil granularity
-        r2 = client.get_spot_candles(sym, tf, limit)
-        if r2.get("code") == "00000" and r2.get("data"):
-            return r2.get("data", []), "spot"
+        # 3. Spot (PAXG, XAUT kabi) — bir xil granularity
+        if sym not in COMMODITY_SYMBOLS:
+            r2 = client.get_spot_candles(sym, tf, limit)
+            if r2.get("code") == "00000" and r2.get("data"):
+                return r2.get("data", []), "spot"
 
-        # 3. Spot — 1D timeframe (agar 1H/4H ishlamasa)
-        if tf != "1D":
-            r3 = client.get_spot_candles(sym, "1D", min(limit, 200))
-            if r3.get("code") == "00000" and r3.get("data"):
-                return r3.get("data", []), "spot_1D"
+            # 4. Spot — 1D timeframe (agar 1H/4H ishlamasa)
+            if tf != "1D":
+                r3 = client.get_spot_candles(sym, "1D", min(limit, 200))
+                if r3.get("code") == "00000" and r3.get("data"):
+                    return r3.get("data", []), "spot_1D"
 
         return [], "none"
 

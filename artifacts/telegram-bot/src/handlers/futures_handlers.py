@@ -14,6 +14,16 @@ from utils.formatters import (
 
 client = BitgetClient()
 
+_zocker_scanner = None
+
+
+def _get_zocker_scanner():
+    global _zocker_scanner
+    if _zocker_scanner is None:
+        from handlers.zocker_signal import ZockerScanner
+        _zocker_scanner = ZockerScanner(client)
+    return _zocker_scanner
+
 
 def futures_main_keyboard():
     return InlineKeyboardMarkup([
@@ -413,3 +423,54 @@ async def handle_futures_signals(update: Update, context: ContextTypes.DEFAULT_T
                 )
         except Exception:
             pass
+
+
+async def handle_zocker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = (
+        "🕯️ <b>ZOCKER SIGNAL</b>\n"
+        "══════════════════════════════\n\n"
+        "📌 <b>Strategiya: Mean Reversion</b>\n\n"
+        "🔴 <b>6-7 ta YASHIL sham</b> → SHORT ochiladi\n"
+        "  └ Narx haddan ziyod ko'tarildi → pasayish\n\n"
+        "🟢 <b>6-7 ta QIZIL sham</b> → LONG ochiladi\n"
+        "  └ Narx haddan ziyod tushdi → ko'tarilish\n\n"
+        "⚙️ <b>Sozlamalar:</b>\n"
+        "├ Timeframe: 1H va 4H\n"
+        "├ Barcha USDT futures cryptolar\n"
+        "├ 24/7 avtomatik qidiruv (har 60s)\n"
+        "└ Signal topilganda DARHOL pozitsiya ochiladi\n\n"
+        "✅ <b>Bot hozir barcha cryptolarni skanerlayapti!</b>"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Hozir Skan Qil (top 50)", callback_data="zocker_scan_now")],
+        [InlineKeyboardButton("🔙 Orqaga", callback_data="section_futures")],
+    ])
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def handle_zocker_scan_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("🔍 Skan boshlanmoqda...")
+    loading = await query.message.reply_text(
+        "🔍 <b>Zocker skan qilinmoqda...</b>\n<i>Top 50 crypto, 1H + 4H — bir necha soniya...</i>",
+        parse_mode="HTML"
+    )
+    try:
+        scanner = _get_zocker_scanner()
+        result  = await scanner.manual_scan_now()
+    except Exception as e:
+        result = f"❌ Xato: {str(e)[:80]}"
+    try:
+        await loading.delete()
+    except Exception:
+        pass
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Qaytadan", callback_data="zocker_scan_now"),
+        InlineKeyboardButton("🔙 Orqaga",   callback_data="fut_zocker"),
+    ]])
+    await query.message.reply_text(
+        f"🕯️ <b>Zocker Skan Natijasi</b>\n{'─'*24}\n{result}",
+        parse_mode="HTML", reply_markup=kb
+    )
