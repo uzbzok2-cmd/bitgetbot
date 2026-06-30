@@ -8,7 +8,7 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_USERNAME = os.environ.get("GITHUB_USERNAME", "")
 GITHUB_REPO = "bitgetbot"
 
-BOT_PASSWORD = "OLLOBERGAN"
+BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "OLLOBERGAN")
 
 FUTURES_BASE_URL = "https://api.bitget.com"
 SPOT_BASE_URL = "https://api.bitget.com"
