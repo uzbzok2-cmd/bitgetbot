@@ -127,10 +127,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cl_analysis":
         await do_coin_analysis_callback(update, context, "CLUSDT")
 
-    # ── Manual trade ("Savdoga Kirish" tugmasi) ───────────
+    # ── Manual trade — 2 bosqichli ────────────────────────
     elif data.startswith("manual_trade_"):
         symbol = data[len("manual_trade_"):]
-        await _handle_manual_trade_request(update, context, symbol)
+        await _handle_manual_trade_step1(update, context, symbol)
+    elif data.startswith("do_trade_"):
+        symbol = data[len("do_trade_"):]
+        await _handle_manual_trade_step2(update, context, symbol)
 
     # ── Trading status ────────────────────────────────────
     elif data == "trading_status":
@@ -168,67 +171,136 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer(f"⚠️ Noma'lum: {data[:30]}")
 
 
-async def _handle_manual_trade_request(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
-    """Foydalanuvchi 'Savdoga Kirish' tugmasini bosdi."""
+async def _fetch_fresh_signal(symbol: str) -> dict | None:
+    """Signal yo'q bo'lsa, yangi tahlil qilib signal yaratish."""
+    try:
+        from services.bitget_client import BitgetClient
+        from services.analyzer import analyze_symbol
+        cl = BitgetClient()
+        for tf in ["1H", "4H"]:
+            r = cl.get_futures_candles(symbol, tf, 150)
+            if r.get("code") != "00000" or not r.get("data"):
+                r = cl.get_candles_any_type(symbol, tf, 150)
+            if r.get("code") != "00000" or not r.get("data"):
+                r = cl.get_spot_candles(symbol, tf, 150)
+            if r.get("code") == "00000" and r.get("data"):
+                sig = analyze_symbol(r["data"], symbol, tf)
+                if sig:
+                    return sig
+    except Exception:
+        pass
+    return None
+
+
+async def _handle_manual_trade_step1(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
+    """Bosqich 1 — Signal ma'lumotlari + Kirish tasdiqlash tugmasi."""
     from services import state as gs
     from services.bitget_client import BitgetClient
     from services.analyzer import safe_float
     from utils.formatters import fmt_price, _pct_lev
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
     query = update.callback_query
-    await query.answer("💰 Savdoga kirish...")
+    await query.answer("📊 Signal yuklanmoqda...")
 
-    user_id = query.from_user.id
-
-    # Signal mavjudmi?
+    # Signal topish (cache yoki yangi tahlil)
     signal = gs.pending_manual_trades.get(symbol)
     if not signal:
+        signal = await _fetch_fresh_signal(symbol)
+        if signal:
+            gs.pending_manual_trades[symbol] = signal
+
+    if not signal:
         await query.message.reply_text(
-            f"⚠️ <b>{symbol} uchun signal topilmadi.</b>\n"
-            f"Avval tahlil qiling.",
+            f"⚠️ <b>{symbol}</b> uchun ma'lumot olinmadi.\n"
+            f"Biroz kuting va qayta urining.",
             parse_mode="HTML"
         )
         return
 
     # Balans
+    available, equity = 0.0, 0.0
     try:
-        client_inst = BitgetClient()
-        acc = client_inst.get_futures_account()
-        available = 0.0; equity = 0.0
+        cl = BitgetClient()
+        acc = cl.get_futures_account()
         if acc.get("code") == "00000":
             available = safe_float(acc["data"].get("available", 0))
             equity    = safe_float(acc["data"].get("usdtEquity", 0))
     except Exception:
-        available = 0.0; equity = 0.0
+        pass
 
-    dir_ = signal.get("direction", "LONG")
+    dir_  = signal.get("direction", "LONG")
     entry = signal.get("entry", 0)
     tp1   = signal.get("tp1", 0)
     sl    = signal.get("sl", 0)
     conf  = signal.get("confidence", 0)
+    tf    = signal.get("timeframe", "1H")
     dir_e = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
 
     text = (
         f"💰 <b>SAVDOGA KIRISH — {symbol}</b>\n"
-        f"{'─'*24}\n"
-        f"📊 Signal: {dir_e}  •  {conf}%\n"
+        f"{'═'*26}\n"
+        f"📊 Signal: {dir_e}  •  <b>{conf}%</b>\n"
+        f"⏱️ Timeframe: <b>{tf}</b>\n"
+        f"{'─'*26}\n"
         f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
-        f"{'─'*24}\n"
         f"💚 TP: <code>${fmt_price(tp1)}</code>  ({_pct_lev(tp1, entry)})\n"
         f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
-        f"{'─'*24}\n"
-        f"💼 <b>Balansingiz:</b>\n"
+        f"{'─'*26}\n"
+        f"💼 <b>Balans:</b>\n"
         f"├ Kapital:  <code>{equity:.2f} USDT</code>\n"
         f"└ Erkin:    <code>{available:.2f} USDT</code>\n"
-        f"{'─'*24}\n"
-        f"📝 <b>Qancha USDT bilan kirishni xohlaysiz?</b>\n"
-        f"<i>Raqam yozing (masalan: 5 yoki 10)</i>"
+        f"{'─'*26}\n"
+        f"👇 <b>Kirish uchun quyidagi tugmani bosing:</b>"
     )
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💰 Kirish — USDT miqdorini kiriting", callback_data=f"do_trade_{symbol}")
+    ]])
+    await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def _handle_manual_trade_step2(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
+    """Bosqich 2 — USDT miqdori so'rash."""
+    from services import state as gs
+    from services.analyzer import safe_float
+    from utils.formatters import fmt_price, _pct_lev
+
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    signal  = gs.pending_manual_trades.get(symbol)
+    if not signal:
+        signal = await _fetch_fresh_signal(symbol)
+        if signal:
+            gs.pending_manual_trades[symbol] = signal
+
+    if not signal:
+        await query.message.reply_text(
+            f"⚠️ Signal topilmadi. Qayta urinib ko'ring.", parse_mode="HTML"
+        )
+        return
 
     gs.waiting_trade_input[user_id] = {
         "symbol": symbol,
         "signal": signal,
-        "direction": dir_,
+        "direction": signal.get("direction", "LONG"),
     }
 
-    await query.message.reply_text(text, parse_mode="HTML")
+    dir_  = signal.get("direction", "LONG")
+    entry = signal.get("entry", 0)
+    tp1   = signal.get("tp1", 0)
+    sl    = signal.get("sl", 0)
+    dir_e = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
+
+    await query.message.reply_text(
+        f"📝 <b>{symbol} — {dir_e}</b>\n"
+        f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
+        f"💚 TP: <code>${fmt_price(tp1)}</code>  ({_pct_lev(tp1, entry)})\n"
+        f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
+        f"{'─'*24}\n"
+        f"💵 <b>Qancha USDT bilan kirishni xohlaysiz?</b>\n"
+        f"<i>Raqam yozing (masalan: 5 yoki 10)</i>",
+        parse_mode="HTML"
+    )

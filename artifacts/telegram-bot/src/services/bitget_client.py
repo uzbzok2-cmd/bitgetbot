@@ -123,7 +123,8 @@ class BitgetClient:
         })
 
     def get_candles_any_type(self, symbol: str, granularity: str = "1H", limit: int = 100) -> dict:
-        """Commodity futures (CL, XAUUSDT va boshqalar) uchun har xil productType sinab ko'rish."""
+        """Commodity futures uchun har xil productType + productType-siz urinish."""
+        # 1. productType bilan
         for pt in ["USDT-FUTURES", "COIN-FUTURES", "USDC-FUTURES"]:
             r = self._get("/api/v2/mix/market/candles", {
                 "symbol": symbol,
@@ -133,7 +134,24 @@ class BitgetClient:
             })
             if r.get("code") == "00000" and r.get("data"):
                 return r
-        return {"code": "error", "msg": f"No candles for {symbol} in any productType", "data": []}
+        # 2. productType-siz (ba'zi commodity futures uchun)
+        r = self._get("/api/v2/mix/market/candles", {
+            "symbol": symbol,
+            "granularity": granularity,
+            "limit": str(limit)
+        })
+        if r.get("code") == "00000" and r.get("data"):
+            return r
+        # 3. history-candles endpoint
+        r = self._get("/api/v2/mix/market/history-candles", {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "granularity": granularity,
+            "limit": str(limit)
+        })
+        if r.get("code") == "00000" and r.get("data"):
+            return r
+        return {"code": "error", "msg": f"No candles for {symbol}", "data": []}
 
     def get_futures_leverage_info(self, symbol: str, product_type: str = "USDT-FUTURES") -> dict:
         return self._get("/api/v2/mix/market/symbol-leverage", {

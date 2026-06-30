@@ -45,6 +45,47 @@ def _price_scale(price: float) -> int:
     return 8
 
 
+def _calc_half_candle_tp_sl(direction: str, candles_data: list,
+                             entry: float, count: int) -> tuple:
+    """
+    TP/SL ni ketma-ket shamlarning yarmi asosida hisoblash.
+    LONG (qizil shamlardan keyin): TP = oxirgi N/2 shamning maksimal HIGH
+    SHORT (yashil shamlardan keyin): TP = oxirgi N/2 shamning minimal LOW
+    SL = 1:1 nisbat (TP distance = SL distance)
+    """
+    try:
+        finished = candles_data[:-1]          # hali yopilmagan sham tashlab
+        consec   = finished[-count:]           # aynan count ta ketma-ket sham
+        half     = max(1, count // 2)
+        target   = consec[-half:]             # oxirgi yarmi
+
+        scale = _price_scale(entry)
+        if direction == "LONG":
+            tp   = max(safe_float(c[2]) for c in target)  # max HIGH
+            dist = abs(tp - entry)
+            sl   = entry - dist
+        else:  # SHORT
+            tp   = min(safe_float(c[3]) for c in target)  # min LOW
+            dist = abs(entry - tp)
+            sl   = entry + dist
+
+        # Sanity check
+        if direction == "LONG":
+            if tp <= entry: tp = round(entry * 1.015, scale)
+            if sl >= entry: sl = round(entry * 0.985, scale)
+        else:
+            if tp >= entry: tp = round(entry * 0.985, scale)
+            if sl <= entry: sl = round(entry * 1.015, scale)
+
+        return round(tp, scale), round(sl, scale)
+    except Exception as e:
+        logger.warning(f"half-candle TP/SL xato: {e}")
+        scale = _price_scale(entry)
+        if direction == "LONG":
+            return round(entry * 1.015, scale), round(entry * 0.985, scale)
+        return round(entry * 0.985, scale), round(entry * 1.015, scale)
+
+
 def _place_tp_sl(client, symbol, plan_type, trig, hold_side, sz):
     """TP yoki SL qo'y, checkScale xatosida avtomatik to'g'rilash."""
     r = client.place_futures_tp_sl(
@@ -196,21 +237,18 @@ class ZockerScanner:
             if sig:
                 entry = sig["entry"]
                 atr   = sig.get("atr", entry * 0.02)
-                commission = 0.0006 * 2
-                atr_r = atr / entry if entry > 0 else 0.02
-                scale = _price_scale(entry)
-                if direction == "SHORT":
-                    tp = round(entry * (1 - atr_r * 1.5 + commission), scale)
-                    sl = round(entry * (1 + atr_r * 1.5 + commission), scale)
-                    if tp >= entry: tp = round(entry * (1 - atr_r * 1.5), scale)
-                    if sl <= entry: sl = round(entry * (1 + atr_r * 1.5), scale)
-                else:
-                    tp = round(entry * (1 + atr_r * 1.5 - commission), scale)
-                    sl = round(entry * (1 - atr_r * 1.5 - commission), scale)
-                    if tp <= entry: tp = round(entry * (1 + atr_r * 1.5), scale)
-                    if sl >= entry: sl = round(entry * (1 - atr_r * 1.5), scale)
+                # Half-candle TP/SL usuli (ATR emas, shamlar HIGH/LOW ga asoslangan)
+                tp, sl = _calc_half_candle_tp_sl(direction, raw, entry, count)
         except Exception as e:
             logger.warning(f"Zocker analyze {symbol}: {e}")
+            # Fallback: entry topish uchun API ticker
+            try:
+                tk = self.client.get_futures_ticker(symbol)
+                if tk.get("code") == "00000" and tk.get("data"):
+                    entry = safe_float(tk["data"][0].get("lastPr", 0))
+                    tp, sl = _calc_half_candle_tp_sl(direction, raw, entry, count)
+            except Exception:
+                pass
 
         if entry > 0:
             gs.pending_manual_trades[symbol] = {

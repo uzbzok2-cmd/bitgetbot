@@ -541,7 +541,7 @@ async def _do_coin_analysis(msg_or_message, context, symbol: str,
                 reply_markup=chart_kb
             )
         except Exception as e:
-            _logger.error(f"Chart error for {symbol}: {e}")
+            _logger.error(f"Chart error for {symbol}: {e}", exc_info=True)
 
 
 # ── InlineKeyboard callbacks ───────────────────────────────
