@@ -4,11 +4,14 @@ Main Telegram Bot entry point.
 - Background trading engine with notifier
 - Zocker signal scanner (6-7 consecutive candles)
 - GitHub auto-sync every 30 min
+- Health check HTTP server (port 10000) for Render Web Service
 """
 import asyncio
 import logging
 import os
 import sys
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -102,11 +105,34 @@ async def _set_tp_sl_on_startup(bot):
         logger.error(f"Startup TP/SL xato: {e}")
 
 
+def _start_health_server():
+    """Render Web Service uchun health check HTTP server (port 10000)."""
+    port = int(os.environ.get("PORT", 10000))
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"BitgetBot OK")
+        def log_message(self, *args):
+            pass  # HTTP loglarni susturish
+
+    try:
+        server = HTTPServer(("0.0.0.0", port), _Handler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        logger.info(f"✅ Health check server started on port {port}")
+    except Exception as e:
+        logger.warning(f"Health server error: {e}")
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not set!")
         sys.exit(1)
 
+    _start_health_server()
     logger.info("🚀 Starting BitgetBot AI Trading v2.0...")
 
     try:
