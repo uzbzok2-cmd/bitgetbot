@@ -247,11 +247,29 @@ class BitgetClient:
         return self._get("/api/v2/spot/market/tickers", {"symbol": symbol})
 
     def get_spot_candles(self, symbol: str, granularity: str = "1H", limit: int = 100) -> dict:
-        return self._get("/api/v2/spot/market/candles", {
+        _gran_map = {
+            "1H": "1h", "4H": "4h", "1D": "1day", "15M": "15min",
+            "30M": "30min", "1h": "1h", "4h": "4h", "1day": "1day",
+        }
+        gran = _gran_map.get(granularity, granularity.lower())
+        r = self._get("/api/v2/spot/market/candles", {
             "symbol": symbol,
-            "granularity": granularity,
+            "granularity": gran,
             "limit": str(limit)
         })
+        if r.get("code") == "00000" and r.get("data"):
+            return r
+        for alt_gran in ["1h", "4h", "1day"]:
+            if alt_gran == gran:
+                continue
+            r2 = self._get("/api/v2/spot/market/candles", {
+                "symbol": symbol,
+                "granularity": alt_gran,
+                "limit": str(limit)
+            })
+            if r2.get("code") == "00000" and r2.get("data"):
+                return r2
+        return r
 
     def get_spot_open_orders(self) -> dict:
         return self._get("/api/v2/spot/trade/unfilled-orders")

@@ -262,7 +262,7 @@ def generate_zocker_chart(
     sl: float = 0,
     leverage: int = 0,
 ) -> io.BytesIO:
-    """Zocker signal chart — consecutive candles highlighted."""
+    """Zocker signal chart — ketma-ket shamlar va TP/SL/Kirish aniq ko'rsatiladi."""
     timestamps, opens, highs, lows, closes, vols = _make_candles(candles_data)
     if not closes:
         return _empty_chart(symbol)
@@ -271,62 +271,76 @@ def generate_zocker_chart(
     op_n = opens[-n:]; hi_n = highs[-n:]
     lo_n = lows[-n:]; cl_n = closes[-n:]
 
-    BG      = "#0d1117"; GRID   = "#1f2937"
-    UP_BODY = "#26a69a"; DN_BODY = "#ef5350"
-    WICK    = "#6b7280"; TEXT_C = "#e5e7eb"
-    ENTRY_C = "#f59e0b"; TP_C   = "#22c55e"; SL_C = "#ef4444"
-    HIGHLIGHT = "#fbbf24"
+    BG        = "#0d1117"; GRID    = "#1f2937"
+    UP_BODY   = "#26a69a"; DN_BODY = "#ef5350"
+    WICK      = "#6b7280"; TEXT_C  = "#e5e7eb"
+    ENTRY_C   = "#f59e0b"; TP_C    = "#22c55e"; SL_C = "#ef4444"
+    HIGHLIGHT = "#fbbf24"; HALF_HL = "#a78bfa"
 
-    fig, ax = plt.subplots(figsize=(10, 5.5), facecolor=BG)
+    fig, ax = plt.subplots(figsize=(12, 6.5), facecolor=BG)
     ax.set_facecolor(BG)
 
+    # Ketma-ket shamlar joylashuvi
+    half_count  = max(1, consecutive_count // 2)
+    total_start = n - consecutive_count - 1   # barcha ketma-ket shamlar boshi
+    half_start  = n - half_count - 1          # oxirgi yarmi (TP hisoblangan)
+
     w = 0.6
-    highlight_start = n - consecutive_count - 1
     for i, (o, h, l, c) in enumerate(zip(op_n, hi_n, lo_n, cl_n)):
-        color = UP_BODY if c >= o else DN_BODY
-        body_lo = min(o, c); body_hi = max(o, c)
-        lw = 0
-        edge_color = None
-        if i >= highlight_start:
-            lw = 1.5
-            edge_color = HIGHLIGHT
-        ax.bar(i, body_hi - body_lo, width=w, bottom=body_lo, color=color,
-               linewidth=lw, edgecolor=edge_color if edge_color else color)
-        ax.plot([i, i], [l, body_lo], color=WICK, linewidth=0.8)
-        ax.plot([i, i], [body_hi, h], color=WICK, linewidth=0.8)
+        color    = UP_BODY if c >= o else DN_BODY
+        body_lo  = min(o, c); body_hi = max(o, c)
+        lw, ec   = 0, color
+
+        if i >= half_start:
+            # Oxirgi N/2 sham — TP hisoblangan (qo'ng'ir ramka)
+            lw = 2.0; ec = HALF_HL
+        elif i >= total_start:
+            # Birinchi qismi — sariq ramka
+            lw = 1.5; ec = HIGHLIGHT
+
+        ax.bar(i, max(body_hi - body_lo, 1e-10), width=w,
+               bottom=body_lo, color=color, linewidth=lw, edgecolor=ec)
+        ax.plot([i, i], [l, body_lo],  color=WICK, linewidth=0.8)
+        ax.plot([i, i], [body_hi, h],  color=WICK, linewidth=0.8)
 
     x_right = n + 2
 
-    def hline(price, color, label, pct_str="", ls="--"):
+    def hline(price, color, label, pct_str="", ls="--", lw=1.4):
         if price <= 0:
             return
-        ax.axhline(price, color=color, linewidth=1.2, linestyle=ls, alpha=0.9)
-        lbl = f" {label}: ${_fmt(price)}"
+        ax.axhline(price, color=color, linewidth=lw, linestyle=ls, alpha=0.95)
+        lbl = f"  {label}: ${_fmt(price)}"
         if pct_str:
             lbl += f"  ({pct_str})"
-        ax.text(x_right - 0.5, price, lbl,
-                color=color, fontsize=7.5, va="center", ha="left", fontweight="bold",
-                bbox=dict(facecolor=BG, edgecolor="none", alpha=0.7, pad=1))
+        ax.text(x_right, price, lbl,
+                color=color, fontsize=8.5, va="center", ha="left", fontweight="bold",
+                bbox=dict(facecolor=BG, edgecolor=color, alpha=0.85, pad=2, linewidth=0.8))
 
     if entry > 0:
-        hline(entry, ENTRY_C, "Kirish", ls="-")
+        hline(entry, ENTRY_C, "✦ KIRISH", ls="-", lw=2.0)
     if tp > 0:
         tp_pct = _pct_label(tp, entry, leverage) if entry > 0 else ""
-        hline(tp, TP_C, "TP", tp_pct)
+        hline(tp, TP_C, "💚 TP", tp_pct, ls="--", lw=1.6)
     if sl > 0:
         sl_pct = _pct_label(sl, entry, leverage) if entry > 0 else ""
-        hline(sl, SL_C, "SL", sl_pct)
+        hline(sl, SL_C, "🛑 SL", sl_pct, ls=":", lw=1.6)
 
-    all_prices = hi_n + lo_n
-    if entry > 0:
-        all_prices += [entry]
-    if tp > 0:
-        all_prices.append(tp)
-    if sl > 0:
-        all_prices.append(sl)
+    # TP/SL oralig'ini rang bilan to'ldirish
+    if entry > 0 and tp > 0 and sl > 0:
+        if direction == "LONG":
+            ax.axhspan(entry, tp, alpha=0.07, color=TP_C)
+            ax.axhspan(sl, entry, alpha=0.07, color=SL_C)
+        else:
+            ax.axhspan(tp, entry, alpha=0.07, color=TP_C)
+            ax.axhspan(entry, sl, alpha=0.07, color=SL_C)
 
-    ax.set_xlim(-1, x_right + 16)
-    margin = (max(all_prices) - min(all_prices)) * 0.12
+    all_prices = list(hi_n) + list(lo_n)
+    if entry > 0: all_prices.append(entry)
+    if tp > 0:    all_prices.append(tp)
+    if sl > 0:    all_prices.append(sl)
+
+    ax.set_xlim(-1, x_right + 20)
+    margin = (max(all_prices) - min(all_prices)) * 0.14
     ax.set_ylim(min(all_prices) - margin, max(all_prices) + margin)
     ax.tick_params(colors=TEXT_C, labelsize=7)
     ax.spines[:].set_color(GRID)
@@ -336,19 +350,38 @@ def generate_zocker_chart(
     ax.set_axisbelow(True)
     ax.xaxis.set_visible(False)
 
-    dir_text = "🟢 XARID IMKONI (6-7 YASHIL)" if direction == "LONG" else "🔴 SOTISH IMKONI (6-7 QIZIL)"
+    dir_lbl  = "🔴 QIZIL" if direction == "LONG" else "🟢 YASHIL"
+    dir_act  = "📈 LONG (Xarid)" if direction == "LONG" else "📉 SHORT (Sotish)"
     ax.set_title(
-        f"{symbol}  •  {timeframe}  |  {dir_text}  •  {consecutive_count} ta ketma-ket sham",
-        color=HIGHLIGHT, fontsize=9.5, fontweight="bold", pad=8
+        f"{symbol}  •  {timeframe}  |  {consecutive_count} ta ketma-ket {dir_lbl} sham → {dir_act}",
+        color=HIGHLIGHT, fontsize=10, fontweight="bold", pad=10
     )
 
-    fig.text(0.99, 0.02,
+    # Legend
+    patches = []
+    if entry > 0:
+        patches.append(mpatches.Patch(color=ENTRY_C, label=f"Kirish  ${_fmt(entry)}"))
+    if tp > 0:
+        tp_pct_lbl = _pct_label(tp, entry, leverage) if entry > 0 else ""
+        patches.append(mpatches.Patch(color=TP_C,
+            label=f"TP (oxirgi {half_count} sham HIGH)  ${_fmt(tp)}  {tp_pct_lbl}"))
+    if sl > 0:
+        sl_pct_lbl = _pct_label(sl, entry, leverage) if entry > 0 else ""
+        patches.append(mpatches.Patch(color=SL_C, label=f"SL (1:1 RR)  ${_fmt(sl)}  {sl_pct_lbl}"))
+    patches.append(mpatches.Patch(color=HIGHLIGHT, label=f"Ketma-ket shamlar ({consecutive_count} ta)"))
+    patches.append(mpatches.Patch(color=HALF_HL,   label=f"TP hisoblangan yarmi ({half_count} ta)"))
+
+    if patches:
+        ax.legend(handles=patches, loc="upper left", fontsize=7.5,
+                  facecolor=BG, edgecolor=GRID, labelcolor=TEXT_C, framealpha=0.9)
+
+    fig.text(0.99, 0.01,
              datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
              color="#4b5563", fontsize=6.5, ha="right")
 
-    plt.tight_layout(pad=0.5)
+    plt.tight_layout(pad=0.6)
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=130, facecolor=BG, bbox_inches="tight")
+    plt.savefig(buf, format="png", dpi=140, facecolor=BG, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf

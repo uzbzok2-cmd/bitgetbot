@@ -193,7 +193,7 @@ async def _fetch_fresh_signal(symbol: str) -> dict | None:
 
 
 async def _handle_manual_trade_step1(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
-    """Bosqich 1 — Signal ma'lumotlari + Kirish tasdiqlash tugmasi."""
+    """Bosqich 1 — Signal tahlili + chart + '2-chi bosish = USDT kiriting' tugmasi."""
     from services import state as gs
     from services.bitget_client import BitgetClient
     from services.analyzer import safe_float
@@ -201,7 +201,7 @@ async def _handle_manual_trade_step1(update: Update, context: ContextTypes.DEFAU
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
     query = update.callback_query
-    await query.answer("📊 Signal yuklanmoqda...")
+    await query.answer("📊 Tahlil yuklanmoqda...")
 
     # Signal topish (cache yoki yangi tahlil)
     signal = gs.pending_manual_trades.get(symbol)
@@ -235,28 +235,57 @@ async def _handle_manual_trade_step1(update: Update, context: ContextTypes.DEFAU
     sl    = signal.get("sl", 0)
     conf  = signal.get("confidence", 0)
     tf    = signal.get("timeframe", "1H")
+    count = signal.get("consecutive_count", 6)
     dir_e = "🟢 LONG" if dir_ == "LONG" else "🔴 SHORT"
+    color_txt = "qizil" if dir_ == "LONG" else "yashil"
 
     text = (
-        f"💰 <b>SAVDOGA KIRISH — {symbol}</b>\n"
-        f"{'═'*26}\n"
-        f"📊 Signal: {dir_e}  •  <b>{conf}%</b>\n"
+        f"🕯️ <b>ZOCKER SIGNAL TAHLILI — {symbol}</b>\n"
+        f"{'═'*28}\n"
+        f"📊 Yo'nalish: {dir_e}  •  <b>{conf}%</b>\n"
         f"⏱️ Timeframe: <b>{tf}</b>\n"
-        f"{'─'*26}\n"
+        f"🕯️ <b>{count} ta ketma-ket {color_txt} sham</b> — Mean Reversion\n"
+        f"{'─'*28}\n"
         f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
-        f"💚 TP: <code>${fmt_price(tp1)}</code>  ({_pct_lev(tp1, entry)})\n"
-        f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
-        f"{'─'*26}\n"
-        f"💼 <b>Balans:</b>\n"
-        f"├ Kapital:  <code>{equity:.2f} USDT</code>\n"
-        f"└ Erkin:    <code>{available:.2f} USDT</code>\n"
-        f"{'─'*26}\n"
-        f"👇 <b>Kirish uchun quyidagi tugmani bosing:</b>"
+        f"💚 TP (oxirgi {max(1,count//2)} sham HIGH): <code>${fmt_price(tp1)}</code>  ({_pct_lev(tp1, entry)})\n"
+        f"🛑 SL (1:1 RR): <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
+        f"{'─'*28}\n"
+        f"💼 <b>Balans:</b>  Kapital: <code>{equity:.2f} USDT</code>  |  Erkin: <code>{available:.2f} USDT</code>\n"
+        f"{'─'*28}\n"
+        f"👇 <b>Savdoga kirish uchun quyidagi tugmani bosing:</b>"
     )
 
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💰 Kirish — USDT miqdorini kiriting", callback_data=f"do_trade_{symbol}")
+        InlineKeyboardButton("💵 USDT miqdorini kiriting →", callback_data=f"do_trade_{symbol}")
     ]])
+
+    # Chart ham yuborish (agar zocker signal bo'lsa)
+    reasons = signal.get("reasons", [])
+    is_zocker = any("ketma-ket" in r or "Zocker" in r or "Mean Reversion" in r for r in reasons)
+    if is_zocker:
+        try:
+            cl2 = BitgetClient()
+            candles = cl2.get_futures_candles(symbol, tf, 60)
+            if candles.get("code") != "00000" or not candles.get("data"):
+                candles = cl2.get_spot_candles(symbol, tf, 60)
+            raw = candles.get("data", [])
+            if raw:
+                from services.chart_generator import generate_zocker_chart
+                buf = generate_zocker_chart(
+                    candles_data=raw, symbol=symbol,
+                    direction=dir_, consecutive_count=count,
+                    timeframe=tf, entry=entry, tp=tp1, sl=sl,
+                )
+                await query.message.reply_photo(
+                    photo=buf,
+                    caption=f"📊 {symbol} {tf} — Kirish: ${fmt_price(entry)} | TP: ${fmt_price(tp1)} | SL: ${fmt_price(sl)}",
+                    reply_markup=kb
+                )
+                await query.message.reply_text(text, parse_mode="HTML")
+                return
+        except Exception:
+            pass
+
     await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 

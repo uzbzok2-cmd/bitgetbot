@@ -255,6 +255,7 @@ class ZockerScanner:
                 "symbol": symbol, "direction": direction,
                 "entry": entry, "tp1": tp, "sl": sl, "atr": atr,
                 "confidence": 65, "timeframe": tf,
+                "consecutive_count": count,
                 "reasons": [
                     f"{count} ta ketma-ket {'yashil' if direction == 'SHORT' else 'qizil'} "
                     f"sham ({tf}) — Mean Reversion"
