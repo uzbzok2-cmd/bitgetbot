@@ -298,13 +298,23 @@ class ZockerScanner:
 
         await self._send_alert(symbol, tf, direction, count, raw, entry, tp, sl)
 
-        if gs.auto_trade_enabled and entry > 0:
+        if gs.auto_trade_enabled and gs.zocker_enabled and entry > 0:
             await self._auto_trade(symbol, tf, direction, entry, tp, sl, atr, count)
 
     async def _auto_trade(self, symbol: str, tf: str, direction: str,
                            entry: float, tp: float, sl: float, atr: float, count: int):
         """Zocker signali uchun avtomatik pozitsiya ochish."""
         try:
+            # Maksimal 3 ta ochiq pozitsiya tekshiruvi
+            pos_d = self.client.get_futures_positions()
+            if pos_d.get("code") == "00000":
+                open_count = sum(1 for p in pos_d.get("data", [])
+                                 if safe_float(p.get("total", 0)) > 0)
+                if open_count >= gs.MAX_AUTO_POSITIONS:
+                    logger.info(f"Zocker {symbol}: {open_count} ta ochiq pozitsiya (limit {gs.MAX_AUTO_POSITIONS}) — o'tkazib yuborildi")
+                    gs.scanner.add_log(f"⏸️ Zocker {symbol}: limit {gs.MAX_AUTO_POSITIONS} ta → o'tkazildi")
+                    return
+
             acc = self.client.get_futures_account()
             if acc.get("code") != "00000":
                 logger.warning("Zocker auto-trade: balans olinmadi")
@@ -376,7 +386,7 @@ class ZockerScanner:
             gs.scanner.add_log(f"✅ Zocker savdo: {symbol} {direction} {max_lev}x")
 
             # TP MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
-            tp_ok, _ = _place_tp_sl(self.client, symbol, "profit_loss", tp, hold_side, size)
+            tp_ok, _ = _place_tp_sl(self.client, symbol, "pos_profit", tp, hold_side, size)
             if not tp_ok:
                 logger.error(f"❌ Zocker {symbol} TP qo'yilmadi — ROLLBACK")
                 gs.scanner.add_log(f"❌ Zocker {symbol} TP fail → rollback")
@@ -384,7 +394,7 @@ class ZockerScanner:
                 return
 
             # SL MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
-            sl_ok, _ = _place_tp_sl(self.client, symbol, "loss_plan", sl, hold_side, size)
+            sl_ok, _ = _place_tp_sl(self.client, symbol, "pos_loss", sl, hold_side, size)
             if not sl_ok:
                 logger.error(f"❌ Zocker {symbol} SL qo'yilmadi — ROLLBACK")
                 gs.scanner.add_log(f"❌ Zocker {symbol} SL fail → rollback")
@@ -455,8 +465,10 @@ class ZockerScanner:
             if sl > 0:
                 text += f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
 
-        if gs.auto_trade_enabled:
+        if gs.auto_trade_enabled and gs.zocker_enabled:
             text += f"{'─'*28}\n⚡ <b>Avtomatik pozitsiya ochilmoqda...</b>"
+        elif not gs.zocker_enabled:
+            text += f"{'─'*28}\n⏸️ <i>Zocker avtosavdo o'chirilgan</i>"
         else:
             text += f"{'─'*28}\n⚠️ <i>Avtosavdo o'chirilgan — qo'lda kirish mumkin.</i>"
 

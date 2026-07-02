@@ -22,6 +22,7 @@ from handlers.spot_handlers import (
 )
 from handlers.trading_status import (
     handle_trading_status, handle_toggle_autotrade,
+    handle_toggle_top_signals, handle_toggle_zocker,
     handle_approve_signal, handle_reject_signal,
     handle_signal_history, handle_signal_history_all,
 )
@@ -140,6 +141,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_trading_status(update, context)
     elif data == "toggle_autotrade":
         await handle_toggle_autotrade(update, context)
+    elif data == "toggle_top_signals":
+        await handle_toggle_top_signals(update, context)
+    elif data == "toggle_zocker":
+        await handle_toggle_zocker(update, context)
 
     # ── Signal history ────────────────────────────────────
     elif data == "sig_hist_today":

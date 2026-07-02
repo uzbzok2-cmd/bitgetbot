@@ -281,19 +281,29 @@ async def _show_bot_status_msg(update, context):
             lines.append(f"• <b>{sym}</b> {dir_e} {tr['leverage']}x {tr['margin']:.1f}$")
         trades_text = "\n".join(lines)
 
+    top_sig_icon = "🟢 YOQILGAN" if gs.top_signals_enabled else "🔴 O'CHIRILGAN"
+    zocker_icon  = "🟢 YOQILGAN" if gs.zocker_enabled      else "🔴 O'CHIRILGAN"
+
     text = (
         f"🤖 <b>BOT JONLI HOLATI</b>\n{'═'*28}\n"
-        f"⚡ <b>Avtosavdo (70%+):</b> {auto_icon}\n"
-        f"📊 <b>Balans foizi:</b> <code>{gs.trade_balance_pct:.1f}%</code>\n"
+        f"⚡ <b>Umumiy avtosavdo:</b> {auto_icon}\n"
+        f"📈 <b>Top Signallar (70%+):</b> {top_sig_icon}\n"
+        f"🕯️ <b>Zocker Signal:</b> {zocker_icon}\n"
+        f"📊 <b>Max pozitsiyalar:</b> <code>{gs.MAX_AUTO_POSITIONS} ta</code>\n"
+        f"💰 <b>Balans foizi:</b> <code>{gs.trade_balance_pct:.1f}%</code>\n"
         f"🔄 <b>Skaner:</b> {scan_icon}\n"
         f"🕒 <b>Oxirgi skan:</b> <code>{last_scan}</code>"
         f"{trades_text}{log_text}"
     )
-    toggle = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled else "🟢 Avtosavdoni Yoqish"
+    auto_btn   = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled  else "🟢 Avtosavdoni Yoqish"
+    top_btn    = "🔴 Top Signals O'chirish"  if gs.top_signals_enabled else "🟢 Top Signals Yoqish"
+    zocker_btn = "🔴 Zocker O'chirish"       if gs.zocker_enabled      else "🟢 Zocker Yoqish"
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(toggle, callback_data="toggle_autotrade")],
+        [InlineKeyboardButton(auto_btn,   callback_data="toggle_autotrade")],
+        [InlineKeyboardButton(top_btn,    callback_data="toggle_top_signals"),
+         InlineKeyboardButton(zocker_btn, callback_data="toggle_zocker")],
         [InlineKeyboardButton("⚙️ Sozlamalar", callback_data="settings"),
-         InlineKeyboardButton("🔄 Yangilash", callback_data="trading_status")],
+         InlineKeyboardButton("🔄 Yangilash",  callback_data="trading_status")],
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 

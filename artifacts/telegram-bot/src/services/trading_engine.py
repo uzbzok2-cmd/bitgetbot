@@ -249,7 +249,8 @@ class TradingEngine:
                 # 70%+ — faqat avtosavdo (signal xabarlari BLOK)
                 if conf >= SIGNAL_NOTIFY_THRESHOLD:
                     if (gs.auto_trade_enabled and
-                            open_count < MAX_FUTURES_ORDERS and
+                            gs.top_signals_enabled and
+                            open_count < gs.MAX_AUTO_POSITIONS and
                             balance >= MIN_ORDER_USDT and
                             symbol not in self.active_futures_signals):
                         gs.scanner.add_log(f"⚡ Savdo: {symbol} {sig['direction']} {conf}%")
@@ -336,7 +337,7 @@ class TradingEngine:
         }
 
         # TP qo'y — muvaffaqiyatsiz bo'lsa pozitsiyani yop
-        tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "profit_loss", final_tp1, hold_side, size)
+        tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_profit", final_tp1, hold_side, size)
         if not tp_ok:
             logger.error(f"❌ {symbol} TP qo'yilmadi — pozitsiya YOPILMOQDA")
             gs.scanner.add_log(f"❌ {symbol} TP fail → rollback")
@@ -346,7 +347,7 @@ class TradingEngine:
             return
 
         # SL qo'y — muvaffaqiyatsiz bo'lsa TP ni bekor qil va pozitsiyani yop
-        sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "loss_plan", final_sl, hold_side, size)
+        sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_loss", final_sl, hold_side, size)
         if not sl_ok:
             logger.error(f"❌ {symbol} SL qo'yilmadi — pozitsiya YOPILMOQDA")
             gs.scanner.add_log(f"❌ {symbol} SL fail → rollback")
@@ -536,7 +537,7 @@ class TradingEngine:
 
         # TP va SL MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
         if symbol not in SKIP_TP_SL_SYMBOLS:
-            tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "profit_loss", final_tp1, hold_side, size)
+            tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_profit", final_tp1, hold_side, size)
             if not tp_ok:
                 logger.error(f"❌ Manual {symbol} TP qo'yilmadi — ROLLBACK")
                 self.client.close_futures_position(symbol, hold_side)
@@ -547,7 +548,7 @@ class TradingEngine:
                     f"• Keyinroq qayta urining"
                 )
 
-            sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "loss_plan", final_sl, hold_side, size)
+            sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_loss", final_sl, hold_side, size)
             if not sl_ok:
                 logger.error(f"❌ Manual {symbol} SL qo'yilmadi — ROLLBACK")
                 self.client.close_futures_position(symbol, hold_side)
@@ -658,8 +659,8 @@ class TradingEngine:
                     # TP1 = 100%, SL = 100%
                     success = True
                     for plan_type, trig, sz in [
-                        ("profit_loss", tp1, size),
-                        ("loss_plan",   sl,  size),
+                        ("pos_profit", tp1, size),
+                        ("pos_loss",   sl,  size),
                     ]:
                         ok, _ = _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
                         if ok:

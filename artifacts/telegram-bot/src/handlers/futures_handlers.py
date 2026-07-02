@@ -166,10 +166,11 @@ def _format_positions_with_tpsl(positions_data: dict, plan_map: dict, funding_ra
                 continue
             if trig <= 0:
                 continue
-            # profit_loss = TP, loss_plan = SL
-            if "profit" in pt:
+            # pos_profit/profit_loss/profit_plan = TP
+            # pos_loss/loss_plan = SL
+            if "profit" in pt or pt == "pos_profit":
                 tps.append(trig)
-            elif pt == "loss_plan" or (pt.startswith("loss") and "profit" not in pt):
+            elif "loss" in pt and "profit" not in pt:
                 sls.append(trig)
 
         lines.append(

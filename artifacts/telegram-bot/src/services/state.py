@@ -8,8 +8,13 @@ from typing import List, Dict, Set, Optional
 # ── Auth ──────────────────────────────────────────────────────────────
 authenticated_users: Set[int] = set()
 
-# ── Auto-trade toggle ─────────────────────────────────────────────────
-auto_trade_enabled: bool = True
+# ── Auto-trade toggles ────────────────────────────────────────────────
+auto_trade_enabled: bool = True      # Umumiy avtosavdo (Top Signals 70%+)
+zocker_enabled: bool     = True      # Zocker Signal avtosavdo
+top_signals_enabled: bool = True     # Top Signals (70%+) avtosavdo
+
+# ── Max avtomatik pozitsiyalar ─────────────────────────────────────────
+MAX_AUTO_POSITIONS: int = 3          # Bir vaqtda maksimal ochiq avto-pozitsiyalar
 
 # ── Balans foizi sozlamasi (default 5%) ───────────────────────────────
 trade_balance_pct: float = 5.0  # har bir avtomatik pozitsiyaga balansnin necha %
