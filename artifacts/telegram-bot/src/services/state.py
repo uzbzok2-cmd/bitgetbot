@@ -14,7 +14,7 @@ zocker_enabled: bool     = True      # Zocker Signal avtosavdo
 top_signals_enabled: bool = True     # Top Signals (70%+) avtosavdo
 
 # ── Max avtomatik pozitsiyalar ─────────────────────────────────────────
-MAX_AUTO_POSITIONS: int = 3          # Bir vaqtda maksimal ochiq avto-pozitsiyalar
+MAX_AUTO_POSITIONS: int = 6          # Bir vaqtda maksimal ochiq pozitsiyalar (siz 3 + bot 3)
 
 # ── Balans foizi sozlamasi (default 5%) ───────────────────────────────
 trade_balance_pct: float = 5.0  # har bir avtomatik pozitsiyaga balansnin necha %
