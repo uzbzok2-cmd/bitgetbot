@@ -1,7 +1,7 @@
 - [Bitget API quirks](bitget-api.md) — Bitget v2 API field names differ from docs; use openPriceAvg not averageOpenPrice.
 - [Python bot in pnpm workspace](python-bot-setup.md) — Python 3.11 bot lives in artifacts/telegram-bot/src, workflow name "Telegram Bot".
 - [GitHub sync limitation](github-sync.md) — Git push blocked in main agent bash; bot process does it via github_sync.py every 30 min.
-- [TP/SL plan types](tp-sl-plan-types.md) — Use profit_loss (TP) and loss_plan (SL); NOT pos_profit/pos_loss for place-tpsl-order.
+- [TP/SL plan types](tp-sl-plan-types.md) — Use pos_profit (TP) and pos_loss (SL); profit_loss/loss_plan now return 400172 "planType Illegal type". orders-plan-pending endpoint also broken (400172).
 - [TP2 removed + silent auto-trade](tp2-removed.md) — TP2 fully removed: TP1=100% position. Auto 70%+ signal notifications BLOCKED; auto-trade still runs silently.
 - [Zocker signal](zocker-signal.md) — handlers/zocker_signal.py detects 6-7 consecutive candles on 1H/4H/1D; runs as background asyncio task in bot.py.
 - [PAXG/XAUT spot fallback](paxg-xaut.md) — PAXG/XAUT not in USDT-FUTURES on Bitget; _do_coin_analysis falls back to spot candles automatically.
