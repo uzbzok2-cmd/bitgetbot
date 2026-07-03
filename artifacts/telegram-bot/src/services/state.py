@@ -12,6 +12,7 @@ authenticated_users: Set[int] = set()
 auto_trade_enabled: bool = True      # Umumiy avtosavdo (Top Signals 70%+)
 zocker_enabled: bool     = True      # Zocker Signal avtosavdo
 top_signals_enabled: bool = True     # Top Signals (70%+) avtosavdo
+zokpat_enabled: bool     = True      # ZOKPAT Pattern Signal avtosavdo
 
 # ── Max avtomatik pozitsiyalar ─────────────────────────────────────────
 MAX_AUTO_POSITIONS: int = 6          # Bir vaqtda maksimal ochiq pozitsiyalar (siz 3 + bot 3)

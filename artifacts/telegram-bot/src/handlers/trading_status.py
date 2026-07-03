@@ -62,6 +62,7 @@ def _build_status_text() -> str:
 
     top_sig_icon   = _status_icon(gs.top_signals_enabled)
     zocker_icon    = _status_icon(gs.zocker_enabled)
+    zokpat_icon    = _status_icon(gs.zokpat_enabled)
     auto_icon      = _status_icon(gs.auto_trade_enabled)
 
     return (
@@ -73,6 +74,7 @@ def _build_status_text() -> str:
         f"⚡ <b>Umumiy avtosavdo:</b> {auto_icon}\n"
         f"📈 <b>Top Signallar (70%+):</b> {top_sig_icon}\n"
         f"🕯️ <b>Zocker Signal:</b> {zocker_icon}\n"
+        f"🔮 <b>ZOKPAT Pattern:</b> {zokpat_icon}\n"
         f"📊 <b>Max pozitsiyalar:</b> <code>{gs.MAX_AUTO_POSITIONS} ta</code>\n"
         f"{progress}{trades_text}{log_text}\n"
         f"{'─'*28}\n"
@@ -84,10 +86,12 @@ def _build_keyboard() -> InlineKeyboardMarkup:
     auto_btn    = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled    else "🟢 Avtosavdoni Yoqish"
     top_btn     = "🔴 Top Signals O'chirish" if gs.top_signals_enabled   else "🟢 Top Signals Yoqish"
     zocker_btn  = "🔴 Zocker O'chirish"      if gs.zocker_enabled        else "🟢 Zocker Yoqish"
+    zokpat_btn  = "🔴 ZOKPAT O'chirish"      if gs.zokpat_enabled        else "🟢 ZOKPAT Yoqish"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(auto_btn,   callback_data="toggle_autotrade")],
-        [InlineKeyboardButton(top_btn,    callback_data="toggle_top_signals"),
-         InlineKeyboardButton(zocker_btn, callback_data="toggle_zocker")],
+        [InlineKeyboardButton(auto_btn,    callback_data="toggle_autotrade")],
+        [InlineKeyboardButton(top_btn,     callback_data="toggle_top_signals"),
+         InlineKeyboardButton(zocker_btn,  callback_data="toggle_zocker")],
+        [InlineKeyboardButton(zokpat_btn,  callback_data="toggle_zokpat")],
         [InlineKeyboardButton("🔄 Yangilash", callback_data="trading_status"),
          InlineKeyboardButton("🏠 Bosh menyu", callback_data="main_menu")],
     ])
@@ -106,13 +110,15 @@ async def handle_trading_status(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_toggle_autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     gs.auto_trade_enabled = not gs.auto_trade_enabled
-    # Umumiy o'chirilganda — ikkala sub-toggle ham o'chadi
+    # Umumiy o'chirilganda — barcha sub-toggle ham o'chadi
     if not gs.auto_trade_enabled:
         gs.top_signals_enabled = False
         gs.zocker_enabled      = False
+        gs.zokpat_enabled      = False
     else:
         gs.top_signals_enabled = True
         gs.zocker_enabled      = True
+        gs.zokpat_enabled      = True
     status = "🟢 YOQILDI" if gs.auto_trade_enabled else "🔴 O'CHIRILDI"
     await query.answer(f"Avtosavdo {status}!")
     await query.edit_message_text(
@@ -142,12 +148,28 @@ async def handle_toggle_top_signals(update: Update, context: ContextTypes.DEFAUL
 async def handle_toggle_zocker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     gs.zocker_enabled = not gs.zocker_enabled
-    if not gs.zocker_enabled and not gs.top_signals_enabled:
+    if not gs.zocker_enabled and not gs.top_signals_enabled and not gs.zokpat_enabled:
         gs.auto_trade_enabled = False
-    elif gs.zocker_enabled or gs.top_signals_enabled:
+    elif gs.zocker_enabled or gs.top_signals_enabled or gs.zokpat_enabled:
         gs.auto_trade_enabled = True
     status = "🟢 YOQILDI" if gs.zocker_enabled else "🔴 O'CHIRILDI"
     await query.answer(f"Zocker Signal {status}!")
+    await query.edit_message_text(
+        _build_status_text(),
+        reply_markup=_build_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+async def handle_toggle_zokpat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    gs.zokpat_enabled = not gs.zokpat_enabled
+    if not gs.zokpat_enabled and not gs.top_signals_enabled and not gs.zocker_enabled:
+        gs.auto_trade_enabled = False
+    elif gs.zokpat_enabled or gs.top_signals_enabled or gs.zocker_enabled:
+        gs.auto_trade_enabled = True
+    status = "🟢 YOQILDI" if gs.zokpat_enabled else "🔴 O'CHIRILDI"
+    await query.answer(f"ZOKPAT Pattern {status}!")
     await query.edit_message_text(
         _build_status_text(),
         reply_markup=_build_keyboard(),

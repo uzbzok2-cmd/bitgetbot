@@ -36,7 +36,8 @@ COMMODITY_SYMBOLS = {"CLUSDT"}
 def bottom_reply_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📈 FYUCHERS"), KeyboardButton("🪙 SPOT")],
+            [KeyboardButton("📈 FYUCHERS"), KeyboardButton("🚀 FYUCHERS 2"),
+             KeyboardButton("🪙 SPOT")],
             [KeyboardButton("🤖 Bot Holati"), KeyboardButton("📜 Signal Tarixi")],
             [KeyboardButton("📊 BTC"), KeyboardButton("📊 ETH"),
              KeyboardButton("💎 PAXG"), KeyboardButton("🥇 XAUT"), KeyboardButton("🛢️ CL")],
@@ -50,6 +51,7 @@ def bottom_reply_keyboard():
 def main_inline_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 FYUCHERS", callback_data="section_futures"),
+         InlineKeyboardButton("🚀 FYUCHERS 2", callback_data="section_futures2"),
          InlineKeyboardButton("🪙 SPOT", callback_data="section_spot")],
         [InlineKeyboardButton("🤖 Jonli Holat", callback_data="trading_status"),
          InlineKeyboardButton("📜 Signal Tarixi", callback_data="sig_hist_today")],
@@ -133,6 +135,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # ── Bottom keyboard routing ───────────────────────────
     if text == "📈 FYUCHERS":
         await _show_futures_msg(update, context)
+    elif text == "🚀 FYUCHERS 2":
+        await _show_futures2_msg(update, context)
     elif text == "🪙 SPOT":
         await _show_spot_msg(update, context)
     elif text == "🤖 Bot Holati":
@@ -252,6 +256,17 @@ async def _show_futures_msg(update, context):
         "Quyidagi bo'limni tanlang 👇"
     )
     await update.message.reply_text(text, reply_markup=futures_main_keyboard(), parse_mode="HTML")
+
+
+async def _show_futures2_msg(update, context):
+    from handlers.futures2_handlers import futures2_main_keyboard
+    text = (
+        "🚀 <b>FYUCHERS 2 — PATTERN TRADING</b>\n"
+        "══════════════════════════════════\n"
+        "🔮 ZOKPAT • Pozitsiyalar • Tarix\n\n"
+        "Quyidagi bo'limni tanlang 👇"
+    )
+    await update.message.reply_text(text, reply_markup=futures2_main_keyboard(), parse_mode="HTML")
 
 
 async def _show_spot_msg(update, context):

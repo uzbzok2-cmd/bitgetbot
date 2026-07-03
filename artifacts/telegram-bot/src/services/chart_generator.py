@@ -453,6 +453,231 @@ def generate_spot_portfolio_chart(
     return buf
 
 
+def generate_pattern_chart(
+    candles_data: list,
+    symbol: str,
+    direction: str,
+    pattern_name: str,
+    entry: float,
+    tp: float,
+    sl: float,
+    confidence: int = 0,
+    timeframe: str = "1H",
+    pattern_draw: dict = None,
+    supports: list = None,
+    resistances: list = None,
+    last_n: int = 80,
+) -> io.BytesIO:
+    """ZOKPAT pattern chart — pattern linelari, TP/SL zonalari, S/R darajalari."""
+    timestamps, opens, highs, lows, closes, vols = _make_candles(candles_data)
+    if not closes:
+        return _empty_chart(symbol)
+
+    n = min(last_n, len(closes))
+    op_n = opens[-n:]; hi_n = highs[-n:]
+    lo_n = lows[-n:]; cl_n = closes[-n:]
+    offset = len(closes) - n   # index offset for pattern points
+
+    BG       = "#0d1117"; GRID   = "#1f2937"
+    UP_BODY  = "#26a69a"; DN_BODY = "#ef5350"
+    WICK     = "#6b7280"; TEXT_C = "#e5e7eb"
+    ENTRY_C  = "#f59e0b"; TP_C   = "#22c55e"
+    SL_C     = "#ef4444"; PAT_C  = "#a78bfa"
+    SR_SUP   = "#34d399"; SR_RES = "#f87171"
+
+    fig, ax = plt.subplots(figsize=(12, 6.5), facecolor=BG)
+    ax.set_facecolor(BG)
+
+    w = 0.6
+    for i, (o, h, l, c) in enumerate(zip(op_n, hi_n, lo_n, cl_n)):
+        color   = UP_BODY if c >= o else DN_BODY
+        body_lo = min(o, c); body_hi = max(o, c)
+        ax.bar(i, max(body_hi - body_lo, 1e-10), width=w,
+               bottom=body_lo, color=color, linewidth=0)
+        ax.plot([i, i], [l, body_lo],  color=WICK, linewidth=0.8)
+        ax.plot([i, i], [body_hi, h],  color=WICK, linewidth=0.8)
+
+    x_right = n + 2
+
+    # ── Support / Resistance zones ────────────────────────────────
+    price_range = max(hi_n) - min(lo_n)
+    zone_h = price_range * 0.005
+
+    for res in (resistances or [])[:3]:
+        ax.axhspan(res - zone_h, res + zone_h, alpha=0.12, color=SR_RES, zorder=1)
+        ax.axhline(res, color=SR_RES, linewidth=0.7, linestyle="--", alpha=0.5)
+
+    for sup in (supports or [])[:3]:
+        ax.axhspan(sup - zone_h, sup + zone_h, alpha=0.12, color=SR_SUP, zorder=1)
+        ax.axhline(sup, color=SR_SUP, linewidth=0.7, linestyle="--", alpha=0.5)
+
+    # ── Pattern-specific lines ────────────────────────────────────
+    pd = pattern_draw or {}
+    ptype = pd.get("type", "")
+
+    def _idx(raw_idx):
+        """Convert raw candle index to chart index."""
+        return raw_idx - offset
+
+    def _draw_line(x1, y1, x2, y2, color=PAT_C, lw=1.5, ls="-"):
+        ax.plot([x1, x2], [y1, y2], color=color, linewidth=lw, linestyle=ls,
+                alpha=0.9, zorder=3)
+
+    def _draw_dot(x, y, color=PAT_C, size=60):
+        ax.scatter([x], [y], color=color, s=size, zorder=5, edgecolors="white",
+                   linewidths=0.5)
+
+    if ptype == "double_top":
+        p1, p2 = _idx(pd["p1"]), _idx(pd["p2"])
+        h1, h2 = pd["h1"], pd["h2"]
+        neckline = pd["neckline"]
+        _draw_dot(p1, h1); _draw_dot(p2, h2)
+        _draw_line(p1, h1, p2, h2, ls="--")
+        ax.axhline(neckline, color=SR_RES, linewidth=1.4, linestyle="-.", alpha=0.8)
+        ax.text(x_right, neckline, " Neckline", color=SR_RES, fontsize=7.5,
+                va="center", fontweight="bold")
+
+    elif ptype == "double_bottom":
+        t1, t2 = _idx(pd["t1"]), _idx(pd["t2"])
+        l1, l2 = pd["l1"], pd["l2"]
+        neckline = pd["neckline"]
+        _draw_dot(t1, l1); _draw_dot(t2, l2)
+        _draw_line(t1, l1, t2, l2, ls="--")
+        ax.axhline(neckline, color=SR_SUP, linewidth=1.4, linestyle="-.", alpha=0.8)
+        ax.text(x_right, neckline, " Neckline", color=SR_SUP, fontsize=7.5,
+                va="center", fontweight="bold")
+
+    elif ptype == "triple_top":
+        for pk_key, h_key in [("p1","h1"),("p2","h2"),("p3","h3")]:
+            if pk_key in pd:
+                _draw_dot(_idx(pd[pk_key]), pd[h_key])
+        neckline = pd.get("neckline", 0)
+        if neckline:
+            ax.axhline(neckline, color=SR_RES, linewidth=1.4, linestyle="-.", alpha=0.8)
+
+    elif ptype == "triple_bottom":
+        for tr_key, l_key in [("t1","l1"),("t2","l2"),("t3","l3")]:
+            if tr_key in pd:
+                _draw_dot(_idx(pd[tr_key]), pd[l_key])
+        neckline = pd.get("neckline", 0)
+        if neckline:
+            ax.axhline(neckline, color=SR_SUP, linewidth=1.4, linestyle="-.", alpha=0.8)
+
+    elif ptype == "hs":
+        ls_i, hd_i, rs_i = _idx(pd["ls"]), _idx(pd["hd"]), _idx(pd["rs"])
+        _draw_dot(ls_i, pd["h_ls"])
+        _draw_dot(hd_i, pd["h_hd"], size=100)
+        _draw_dot(rs_i, pd["h_rs"])
+        _draw_line(ls_i, pd["h_ls"], hd_i, pd["h_hd"])
+        _draw_line(hd_i, pd["h_hd"], rs_i, pd["h_rs"])
+        nl = pd.get("neckline", 0)
+        if nl:
+            ax.axhline(nl, color=SR_RES, linewidth=1.4, linestyle="-.", alpha=0.8)
+            ax.text(x_right, nl, " Neckline", color=SR_RES, fontsize=7.5,
+                    va="center", fontweight="bold")
+
+    elif ptype == "ihs":
+        ls_i, hd_i, rs_i = _idx(pd["ls"]), _idx(pd["hd"]), _idx(pd["rs"])
+        _draw_dot(ls_i, pd["l_ls"])
+        _draw_dot(hd_i, pd["l_hd"], size=100)
+        _draw_dot(rs_i, pd["l_rs"])
+        _draw_line(ls_i, pd["l_ls"], hd_i, pd["l_hd"])
+        _draw_line(hd_i, pd["l_hd"], rs_i, pd["l_rs"])
+        nl = pd.get("neckline", 0)
+        if nl:
+            ax.axhline(nl, color=SR_SUP, linewidth=1.4, linestyle="-.", alpha=0.8)
+            ax.text(x_right, nl, " Neckline", color=SR_SUP, fontsize=7.5,
+                    va="center", fontweight="bold")
+
+    elif ptype in ("wedge_rising", "wedge_falling",
+                   "triangle_asc", "triangle_desc", "triangle_sym"):
+        p1i, p2i = _idx(pd["p1"]), _idx(pd["p2"])
+        t1i, t2i = _idx(pd["t1"]), _idx(pd["t2"])
+        # Upper trendline (peaks)
+        _draw_line(p1i, pd["h_p1"], p2i, pd["h_p2"], color=SR_RES, lw=1.8)
+        # Lower trendline (troughs)
+        _draw_line(t1i, pd["l_t1"], t2i, pd["l_t2"], color=SR_SUP, lw=1.8)
+        # Extend trendlines a bit to the right
+        up_slope = (pd["h_p2"] - pd["h_p1"]) / max(pd["p2"] - pd["p1"], 1)
+        lo_slope = (pd["l_t2"] - pd["l_t1"]) / max(pd["t2"] - pd["t1"], 1)
+        ext = min(15, n - p2i)
+        _draw_line(p2i, pd["h_p2"], p2i + ext,
+                   pd["h_p2"] + up_slope * ext, color=SR_RES, lw=1.2, ls="--")
+        _draw_line(t2i, pd["l_t2"], t2i + ext,
+                   pd["l_t2"] + lo_slope * ext, color=SR_SUP, lw=1.2, ls="--")
+
+    # ── TP / SL / ENTRY lines ────────────────────────────────────────
+    def hline(price, color, label, pct_str="", ls="--", lw=1.4):
+        if price <= 0:
+            return
+        ax.axhline(price, color=color, linewidth=lw, linestyle=ls, alpha=0.95)
+        lbl = f"  {label}: ${_fmt(price)}"
+        if pct_str:
+            lbl += f"  ({pct_str})"
+        ax.text(x_right, price, lbl, color=color, fontsize=8,
+                va="center", ha="left", fontweight="bold",
+                bbox=dict(facecolor=BG, edgecolor=color, alpha=0.85, pad=2, linewidth=0.7))
+
+    tp_pct = _pct_label(tp, entry) if entry > 0 else ""
+    sl_pct = _pct_label(sl, entry) if entry > 0 else ""
+
+    hline(entry, ENTRY_C, "✦ KIRISH", ls="-", lw=2.0)
+    hline(tp, TP_C, "💚 TP", tp_pct)
+    hline(sl, SL_C, "🛑 SL", sl_pct)
+
+    # TP/SL zones
+    if entry > 0 and tp > 0 and sl > 0:
+        if direction == "LONG":
+            ax.axhspan(entry, tp, alpha=0.07, color=TP_C)
+            ax.axhspan(sl, entry, alpha=0.07, color=SL_C)
+        else:
+            ax.axhspan(tp, entry, alpha=0.07, color=TP_C)
+            ax.axhspan(entry, sl, alpha=0.07, color=SL_C)
+
+    # ── Axis limits ──────────────────────────────────────────────────
+    all_prices = list(hi_n) + list(lo_n)
+    if entry > 0: all_prices.append(entry)
+    if tp > 0:    all_prices.append(tp)
+    if sl > 0:    all_prices.append(sl)
+    margin = (max(all_prices) - min(all_prices)) * 0.14
+    ax.set_xlim(-1, x_right + 24)
+    ax.set_ylim(min(all_prices) - margin, max(all_prices) + margin)
+
+    ax.tick_params(colors=TEXT_C, labelsize=7)
+    for spine in ax.spines.values():
+        spine.set_edgecolor(GRID)
+    ax.yaxis.grid(True, color=GRID, linewidth=0.5, alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.xaxis.set_visible(False)
+
+    dir_lbl = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+    ax.set_title(
+        f"{symbol}  •  {timeframe}  |  📐 {pattern_name}  →  {dir_lbl}  •  {confidence}% ishonch",
+        color=PAT_C, fontsize=10, fontweight="bold", pad=10
+    )
+
+    # Legend
+    import matplotlib.patches as mpatches
+    patches = [
+        mpatches.Patch(color=ENTRY_C, label=f"Kirish  ${_fmt(entry)}"),
+        mpatches.Patch(color=TP_C,    label=f"TP  ${_fmt(tp)}  {tp_pct}"),
+        mpatches.Patch(color=SL_C,    label=f"SL  ${_fmt(sl)}  {sl_pct}"),
+        mpatches.Patch(color=PAT_C,   label=f"{pattern_name}"),
+    ]
+    ax.legend(handles=patches, loc="upper left", fontsize=7.5,
+              facecolor=BG, edgecolor=GRID, labelcolor=TEXT_C, framealpha=0.9)
+
+    fig.text(0.99, 0.01, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+             color="#4b5563", fontsize=6.5, ha="right")
+
+    plt.tight_layout(pad=0.6)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=140, facecolor=BG, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 def _fmt(p: float) -> str:
     if p >= 1000:
         return f"{p:,.2f}"

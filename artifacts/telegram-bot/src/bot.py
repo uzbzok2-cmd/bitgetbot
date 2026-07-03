@@ -81,11 +81,28 @@ async def run_github_sync():
             logger.error(f"GitHub sync error: {e}")
 
 
+async def run_zokpat_scanner(bot):
+    """Background: ZOKPAT pattern signal — chart patterns."""
+    await asyncio.sleep(25)  # Trading engine + Zocker ishga tushguncha kutamiz
+    try:
+        from handlers.zokpat_scanner import ZokpatScanner
+        client = BitgetClient()
+        scanner = ZokpatScanner(client, bot=bot)
+        import builtins
+        builtins._zokpat_scanner = scanner
+        logger.info("🔮 ZOKPAT scanner started")
+        gs.scanner.add_log("🔮 ZOKPAT scanner ishga tushdi")
+        await scanner.run()
+    except Exception as e:
+        logger.error(f"ZOKPAT scanner error: {e}")
+
+
 async def post_init(application):
     """Launch background tasks after bot starts."""
     loop = asyncio.get_event_loop()
     loop.create_task(run_trading_background(application.bot))
     loop.create_task(run_zocker_scanner(application.bot))
+    loop.create_task(run_zokpat_scanner(application.bot))
     loop.create_task(run_github_sync())
     loop.create_task(_set_tp_sl_on_startup(application.bot))
 

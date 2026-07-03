@@ -22,9 +22,13 @@ from handlers.spot_handlers import (
 )
 from handlers.trading_status import (
     handle_trading_status, handle_toggle_autotrade,
-    handle_toggle_top_signals, handle_toggle_zocker,
+    handle_toggle_top_signals, handle_toggle_zocker, handle_toggle_zokpat,
     handle_approve_signal, handle_reject_signal,
     handle_signal_history, handle_signal_history_all,
+)
+from handlers.futures2_handlers import (
+    show_futures2_main, handle_zokpat_menu, handle_zokpat_scan_now,
+    handle_f2_positions, handle_f2_history, handle_f2_history_period,
 )
 from handlers.statistics import handle_statistics
 from handlers.settings import handle_settings_callback
@@ -116,6 +120,24 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "zocker_scan_now":
         await handle_zocker_scan_now(update, context)
 
+    # ── FYUCHERS 2 ────────────────────────────────────────
+    elif data in ("section_futures2", "fut2_main", "fut2_refresh"):
+        await show_futures2_main(update, context)
+    elif data == "f2_zokpat":
+        await handle_zokpat_menu(update, context)
+    elif data == "zokpat_scan_now":
+        await handle_zokpat_scan_now(update, context)
+    elif data == "f2_positions":
+        await handle_f2_positions(update, context)
+    elif data == "f2_history":
+        await handle_f2_history(update, context)
+    elif data == "f2_hist_today":
+        await handle_f2_history_period(update, context, "today")
+    elif data == "f2_hist_7d":
+        await handle_f2_history_period(update, context, "7d")
+    elif data == "f2_hist_30d":
+        await handle_f2_history_period(update, context, "30d")
+
     # ── Analysis (BTC, ETH, PAXG, XAUT, CL) ──────────────
     elif data == "btc_analysis":
         await do_coin_analysis_callback(update, context, "BTCUSDT")
@@ -145,6 +167,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_toggle_top_signals(update, context)
     elif data == "toggle_zocker":
         await handle_toggle_zocker(update, context)
+    elif data == "toggle_zokpat":
+        await handle_toggle_zokpat(update, context)
 
     # ── Signal history ────────────────────────────────────
     elif data == "sig_hist_today":
