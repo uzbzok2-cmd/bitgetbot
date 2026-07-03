@@ -11,7 +11,8 @@ import os
 import re
 from typing import Optional, Dict, List, Tuple
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from telegram.ext import ContextTypes
@@ -69,33 +70,39 @@ Qoidalar:
 - FAQAT JSON qaytargil"""
 
 
-def _gemini_model():
+def _gemini_client() -> Optional[genai.Client]:
     if not GEMINI_KEY:
         return None
     try:
-        genai.configure(api_key=GEMINI_KEY)
-        return genai.GenerativeModel("gemini-2.0-flash")
+        return genai.Client(api_key=GEMINI_KEY)
     except Exception as e:
-        logger.error(f"Gemini model xato: {e}")
+        logger.error(f"Gemini client xato: {e}")
         return None
+
+
+def _parse_gemini_text(text: str) -> Optional[Dict]:
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return json.loads(text)
 
 
 async def analyze_image_with_gemini(photo_bytes: bytes) -> Optional[Dict]:
     """Gemini Vision orqali chart/strategiya rasmini tahlil qilish."""
-    model = _gemini_model()
-    if not model:
+    client = _gemini_client()
+    if not client:
         return None
     try:
         img = Image.open(io.BytesIO(photo_bytes))
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: model.generate_content([ANALYSIS_PROMPT, img])
+            lambda: client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[ANALYSIS_PROMPT, img],
+            )
         )
-        text = response.text.strip()
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-        data = json.loads(text)
+        data = _parse_gemini_text(response.text)
         logger.info(f"Gemini tahlil: {data.get('direction')} | {data.get('patterns')} | tf={data.get('scan_timeframes')}")
         return data
     except Exception as e:
@@ -105,8 +112,8 @@ async def analyze_image_with_gemini(photo_bytes: bytes) -> Optional[Dict]:
 
 async def analyze_text_with_gemini(user_text: str) -> Optional[Dict]:
     """Matn tavsifi orqali strategiya tahlili."""
-    model = _gemini_model()
-    if not model:
+    client = _gemini_client()
+    if not client:
         return None
     prompt = (
         f"Foydalanuvchi bu savdo strategiyasini tasvirlab berdi:\n\n\"{user_text}\"\n\n"
@@ -114,11 +121,14 @@ async def analyze_text_with_gemini(user_text: str) -> Optional[Dict]:
     )
     try:
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
-        text = response.text.strip()
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-        return json.loads(text)
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt],
+            )
+        )
+        return _parse_gemini_text(response.text)
     except Exception as e:
         logger.error(f"Gemini text analysis xato: {e}")
         return None
