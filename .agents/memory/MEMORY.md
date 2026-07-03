@@ -4,4 +4,5 @@
 - [TP/SL plan types](tp-sl-plan-types.md) — Use pos_profit (TP) and pos_loss (SL); profit_loss/loss_plan now return 400172 "planType Illegal type". orders-plan-pending endpoint also broken (400172).
 - [TP2 removed + silent auto-trade](tp2-removed.md) — TP2 fully removed: TP1=100% position. Auto 70%+ signal notifications BLOCKED; auto-trade still runs silently.
 - [Zocker signal](zocker-signal.md) — handlers/zocker_signal.py detects 6-7 consecutive candles on 1H/4H/1D; runs as background asyncio task in bot.py.
+- [ZOKPAT pattern system](zokpat-system.md) — FYUCHERS 2 section with chart pattern scanner; state.zokpat_enabled toggle; zokpat_scanner.py background task starts 25s after bot init.
 - [PAXG/XAUT spot fallback](paxg-xaut.md) — PAXG/XAUT not in USDT-FUTURES on Bitget; _do_coin_analysis falls back to spot candles automatically.
