@@ -9,10 +9,11 @@ from typing import List, Dict, Set, Optional
 authenticated_users: Set[int] = set()
 
 # ── Auto-trade toggles ────────────────────────────────────────────────
-auto_trade_enabled: bool = True      # Umumiy avtosavdo (Top Signals 70%+)
-zocker_enabled: bool     = True      # Zocker Signal avtosavdo
+auto_trade_enabled: bool  = True     # Umumiy avtosavdo (Top Signals 70%+)
+zocker_enabled: bool      = True     # Zocker Signal avtosavdo
+zocker_notify: bool       = True     # Zocker Signal xabarnomalar (chart+alert)
 top_signals_enabled: bool = True     # Top Signals (70%+) avtosavdo
-zokpat_enabled: bool     = True      # ZOKPAT Pattern Signal avtosavdo
+zokpat_enabled: bool      = True     # ZOKPAT Pattern Signal avtosavdo
 
 # ── Max avtomatik pozitsiyalar ─────────────────────────────────────────
 MAX_AUTO_POSITIONS: int = 6          # Bir vaqtda maksimal ochiq pozitsiyalar (siz 3 + bot 3)

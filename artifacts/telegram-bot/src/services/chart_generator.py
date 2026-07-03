@@ -466,9 +466,12 @@ def generate_pattern_chart(
     pattern_draw: dict = None,
     supports: list = None,
     resistances: list = None,
+    nearest_res: float = None,
+    nearest_sup: float = None,
+    trend: dict = None,
     last_n: int = 80,
 ) -> io.BytesIO:
-    """ZOKPAT pattern chart — pattern linelari, TP/SL zonalari, S/R darajalari."""
+    """ZOKPAT pattern chart — trend chiziqlari, S/R zonalari, pattern chizmalari."""
     timestamps, opens, highs, lows, closes, vols = _make_candles(candles_data)
     if not closes:
         return _empty_chart(symbol)
@@ -478,12 +481,13 @@ def generate_pattern_chart(
     lo_n = lows[-n:]; cl_n = closes[-n:]
     offset = len(closes) - n   # index offset for pattern points
 
-    BG       = "#0d1117"; GRID   = "#1f2937"
+    BG       = "#0d1117"; GRID    = "#1f2937"
     UP_BODY  = "#26a69a"; DN_BODY = "#ef5350"
-    WICK     = "#6b7280"; TEXT_C = "#e5e7eb"
-    ENTRY_C  = "#f59e0b"; TP_C   = "#22c55e"
-    SL_C     = "#ef4444"; PAT_C  = "#a78bfa"
-    SR_SUP   = "#34d399"; SR_RES = "#f87171"
+    WICK     = "#6b7280"; TEXT_C  = "#e5e7eb"
+    ENTRY_C  = "#f59e0b"; TP_C    = "#22c55e"
+    SL_C     = "#ef4444"; PAT_C   = "#a78bfa"
+    SR_SUP   = "#34d399"; SR_RES  = "#f87171"
+    TREND_UP = "#60a5fa"; TREND_DN = "#fb923c"
 
     fig, ax = plt.subplots(figsize=(12, 6.5), facecolor=BG)
     ax.set_facecolor(BG)
@@ -499,17 +503,60 @@ def generate_pattern_chart(
 
     x_right = n + 2
 
+    # ── Trend lines ───────────────────────────────────────────────
+    if trend:
+        t_offset = trend.get("offset", 0)
+        chart_shift = t_offset - offset   # trend x → chart x conversion
+
+        ul = trend.get("upper_line")
+        if ul:
+            x0c = ul["x0"] + chart_shift
+            x1c = ul["x1"] + chart_shift
+            # extend to current candle
+            x1e = n - 1
+            y1e = ul["slope"] * (x1e - chart_shift) + ul["intercept"]
+            t_color = TREND_DN if trend.get("direction") == "down" else TREND_UP
+            ax.plot([x0c, x1e], [ul["y0"], y1e],
+                    color=t_color, linewidth=1.6, linestyle="--",
+                    alpha=0.75, zorder=2, label="Trend (yuqori)")
+
+        ll = trend.get("lower_line")
+        if ll:
+            x0c = ll["x0"] + chart_shift
+            x1e = n - 1
+            y1e = ll["slope"] * (x1e - chart_shift) + ll["intercept"]
+            t_color2 = TREND_UP if trend.get("direction") == "up" else TREND_DN
+            ax.plot([x0c, x1e], [ll["y0"], y1e],
+                    color=t_color2, linewidth=1.6, linestyle="--",
+                    alpha=0.75, zorder=2, label="Trend (pastki)")
+
+        if trend.get("trend_broken"):
+            brk_dir = trend.get("break_dir", "")
+            brk_txt = f"🔺 Trend yorildi → {brk_dir}"
+            ax.text(2, float(max(hi_n)) * 0.998, brk_txt,
+                    color=TP_C if brk_dir == "LONG" else SL_C,
+                    fontsize=8, fontweight="bold",
+                    bbox=dict(facecolor=BG, edgecolor=ENTRY_C, alpha=0.8, pad=2))
+
     # ── Support / Resistance zones ────────────────────────────────
     price_range = max(hi_n) - min(lo_n)
     zone_h = price_range * 0.005
 
-    for res in (resistances or [])[:3]:
-        ax.axhspan(res - zone_h, res + zone_h, alpha=0.12, color=SR_RES, zorder=1)
-        ax.axhline(res, color=SR_RES, linewidth=0.7, linestyle="--", alpha=0.5)
+    for res in (resistances or [])[:4]:
+        is_nearest = nearest_res and abs(res - nearest_res) / max(nearest_res, 1e-10) < 0.01
+        alpha_span = 0.22 if is_nearest else 0.10
+        alpha_line = 0.85 if is_nearest else 0.45
+        lw = 1.2 if is_nearest else 0.7
+        ax.axhspan(res - zone_h, res + zone_h, alpha=alpha_span, color=SR_RES, zorder=1)
+        ax.axhline(res, color=SR_RES, linewidth=lw, linestyle="--", alpha=alpha_line)
 
-    for sup in (supports or [])[:3]:
-        ax.axhspan(sup - zone_h, sup + zone_h, alpha=0.12, color=SR_SUP, zorder=1)
-        ax.axhline(sup, color=SR_SUP, linewidth=0.7, linestyle="--", alpha=0.5)
+    for sup in (supports or [])[:4]:
+        is_nearest = nearest_sup and abs(sup - nearest_sup) / max(nearest_sup, 1e-10) < 0.01
+        alpha_span = 0.22 if is_nearest else 0.10
+        alpha_line = 0.85 if is_nearest else 0.45
+        lw = 1.2 if is_nearest else 0.7
+        ax.axhspan(sup - zone_h, sup + zone_h, alpha=alpha_span, color=SR_SUP, zorder=1)
+        ax.axhline(sup, color=SR_SUP, linewidth=lw, linestyle="--", alpha=alpha_line)
 
     # ── Pattern-specific lines ────────────────────────────────────
     pd = pattern_draw or {}

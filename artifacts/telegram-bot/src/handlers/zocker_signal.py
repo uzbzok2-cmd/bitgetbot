@@ -437,6 +437,9 @@ class ZockerScanner:
         """Signal alert va chart yuborish."""
         if not self.bot or not gs.notifier_chat_id:
             return
+        if not gs.zocker_notify:
+            logger.info(f"Zocker xabarnomalar o'chirilgan — {symbol} o'tkazildi")
+            return
 
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 

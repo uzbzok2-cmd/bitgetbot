@@ -337,6 +337,9 @@ class ZokpatScanner:
                 timeframe=tf, pattern_draw=pat.get("draw", {}),
                 supports=pat.get("supports", []),
                 resistances=pat.get("resistances", []),
+                nearest_res=pat.get("nearest_res"),
+                nearest_sup=pat.get("nearest_sup"),
+                trend=pat.get("trend"),
             )
             await self.bot.send_photo(
                 chat_id=gs.notifier_chat_id, photo=buf,
@@ -344,7 +347,7 @@ class ZokpatScanner:
                 reply_markup=kb
             )
         except Exception as chart_err:
-            logger.warning(f"ZOKPAT chart error: {chart_err}")
+            logger.warning(f"ZOKPAT chart error: {chart_err}", exc_info=True)
 
         try:
             await self.bot.send_message(
@@ -355,7 +358,7 @@ class ZokpatScanner:
             logger.error(f"ZOKPAT send error: {e}")
 
     async def manual_scan_now(self) -> str:
-        """Qo'lda skan — top 30 symbol, 1H va 4H."""
+        """Qo'lda skan — top 30 symbol, 1H va 4H. Topilganlarga chart + alert yuboradi."""
         symbols = await self._get_symbols()
         found   = []
         checked = 0
@@ -376,10 +379,13 @@ class ZokpatScanner:
                             f"• <b>{symbol}</b> {tf}: {pat['pattern']} → {dir_e} "
                             f"({pat['confidence']}%)"
                         )
+                        # Chart + alert yuborish
+                        await self._handle_signal(symbol, tf, pat, raw)
+                        await asyncio.sleep(1.5)
                     checked += 1
-                    await asyncio.sleep(0.1)
-                except Exception:
-                    pass
+                    await asyncio.sleep(0.12)
+                except Exception as e:
+                    logger.debug(f"manual_scan {symbol} {tf}: {e}")
         if found:
-            return f"🔮 <b>ZOKPAT topildi ({len(found)} ta):</b>\n" + "\n".join(found[:10])
-        return f"🔍 {checked} ta symbol tekshirildi — hozircha pattern yo'q."
+            return f"🔮 <b>ZOKPAT topildi ({len(found)} ta) — chartlar yuborildi!</b>\n" + "\n".join(found[:10])
+        return f"🔍 {checked} ta symbol tekshirildi — hozircha aniq pattern yo'q."
