@@ -37,7 +37,7 @@ def bottom_reply_keyboard():
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("📈 FYUCHERS"), KeyboardButton("🚀 FYUCHERS 2"),
-             KeyboardButton("🪙 SPOT")],
+             KeyboardButton("🧠 AI Chat"), KeyboardButton("🪙 SPOT")],
             [KeyboardButton("🤖 Bot Holati"), KeyboardButton("📜 Signal Tarixi")],
             [KeyboardButton("📊 BTC"), KeyboardButton("📊 ETH"),
              KeyboardButton("💎 PAXG"), KeyboardButton("🥇 XAUT"), KeyboardButton("🛢️ CL")],
@@ -137,6 +137,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _show_futures_msg(update, context)
     elif text == "🚀 FYUCHERS 2":
         await _show_futures2_msg(update, context)
+    elif text == "🧠 AI Chat":
+        from handlers.ai_chat import handle_ai_chat_entry
+        await handle_ai_chat_entry(update, context)
+        return
     elif text == "🪙 SPOT":
         await _show_spot_msg(update, context)
     elif text == "🤖 Bot Holati":

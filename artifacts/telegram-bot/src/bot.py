@@ -22,6 +22,7 @@ from telegram.ext import (
 from config import TELEGRAM_BOT_TOKEN
 from handlers.main_menu import start_command, handle_text_message
 from handlers.callback_router import callback_router
+from handlers.ai_chat import handle_ai_chat_photo, handle_ai_chat_text
 from services.trading_engine import TradingEngine
 from services.bitget_client import BitgetClient
 from services.github_sync import initial_push, commit_and_push
@@ -110,6 +111,18 @@ async def post_init(application):
     gs.scanner.add_log("✅ Background tasks ishga tushdi")
 
 
+async def _route_text(update: Update, context):
+    """Text xabarni AI chat yoki oddiy menyu'ga yo'naltirish."""
+    from handlers.ai_chat import handle_ai_chat_text
+    from services import state as gs
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id and user_id in gs.ai_chat_users:
+        handled = await handle_ai_chat_text(update, context)
+        if handled:
+            return
+    await handle_text_message(update, context)
+
+
 async def _set_tp_sl_on_startup(bot):
     """Startup da mavjud pozitsiyalarga TP/SL qo'y."""
     await asyncio.sleep(5)
@@ -170,7 +183,8 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu",  start_command))
     app.add_handler(CallbackQueryHandler(callback_router))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_ai_chat_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_text))
 
     logger.info("✅ Handlers registered, starting polling...")
     app.run_polling(

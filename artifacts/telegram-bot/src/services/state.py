@@ -7,6 +7,7 @@ from typing import List, Dict, Set, Optional
 
 # ── Auth ──────────────────────────────────────────────────────────────
 authenticated_users: Set[int] = set()
+ai_chat_users: Set[int]       = set()   # AI Chat modeda turgan userlar
 
 # ── Auto-trade toggles ────────────────────────────────────────────────
 auto_trade_enabled: bool  = True     # Umumiy avtosavdo (Top Signals 70%+)

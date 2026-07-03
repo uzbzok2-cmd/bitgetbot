@@ -31,6 +31,7 @@ from handlers.futures2_handlers import (
     show_futures2_main, handle_zokpat_menu, handle_zokpat_scan_now,
     handle_f2_positions, handle_f2_history, handle_f2_history_period,
 )
+from handlers.ai_chat import handle_ai_chat_exit_callback
 from handlers.statistics import handle_statistics
 from handlers.settings import handle_settings_callback
 
@@ -172,6 +173,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_toggle_zocker_notify(update, context)
     elif data == "toggle_zokpat":
         await handle_toggle_zokpat(update, context)
+
+    # ── AI Chat ───────────────────────────────────────────
+    elif data == "ai_chat_exit":
+        await handle_ai_chat_exit_callback(update, context)
 
     # ── Signal history ────────────────────────────────────
     elif data == "sig_hist_today":
