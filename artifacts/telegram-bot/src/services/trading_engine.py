@@ -280,15 +280,39 @@ class TradingEngine:
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
 
-        # TP1 = 100% of position, SL = 100%
-        for plan_type, trig, sz in [
-            ("profit_loss", final_tp1, size),
-            ("loss_plan",   final_sl,  size),
-        ]:
-            try:
-                _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
-            except Exception as e:
-                logger.error(f"TP/SL error {symbol}: {e}")
+        # Bitget pozitsiyani ro'yxatga olishi uchun 3 soniya kutamiz
+        await asyncio.sleep(3)
+
+        # TP1 = 100% of position, SL = 100% — retry bilan
+        tp_ok, sl_ok = False, False
+        for attempt in range(3):
+            if not tp_ok:
+                try:
+                    ok, _ = _place_tp_sl_with_retry(self.client, symbol, "profit_loss", final_tp1, hold_side, size)
+                    if ok:
+                        tp_ok = True
+                        logger.info(f"✅ TP qo'yildi: {symbol} {final_tp1}")
+                    else:
+                        logger.warning(f"⚠️ TP urinish {attempt+1}/3 {symbol}")
+                except Exception as e:
+                    logger.error(f"TP error {symbol}: {e}")
+            if not sl_ok:
+                try:
+                    ok, _ = _place_tp_sl_with_retry(self.client, symbol, "loss_plan", final_sl, hold_side, size)
+                    if ok:
+                        sl_ok = True
+                        logger.info(f"✅ SL qo'yildi: {symbol} {final_sl}")
+                    else:
+                        logger.warning(f"⚠️ SL urinish {attempt+1}/3 {symbol}")
+                except Exception as e:
+                    logger.error(f"SL error {symbol}: {e}")
+            if tp_ok and sl_ok:
+                break
+            if attempt < 2:
+                await asyncio.sleep(2)
+
+        if not (tp_ok and sl_ok):
+            gs.scanner.add_log(f"⚠️ {symbol} TP/SL to'liq qo'yilmadi (TP:{tp_ok} SL:{sl_ok})")
 
         if self.bot and gs.notifier_chat_id:
             from utils.formatters import format_auto_trade_notify
@@ -444,16 +468,33 @@ class TradingEngine:
 
         order_id = result.get("data", {}).get("orderId", "")
 
-        # TP1 = 100% position, SL = 100%
+        # Manual trade TP/SL — Bitget orderini qayta ishlashi uchun 3 soniya kutamiz
         if symbol not in SKIP_TP_SL_SYMBOLS:
-            for plan_type, trig, sz in [
-                ("profit_loss", final_tp1, size),
-                ("loss_plan",   final_sl,  size),
-            ]:
-                try:
-                    _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
-                except Exception as e:
-                    logger.error(f"Manual TP/SL error {symbol}: {e}")
+            await asyncio.sleep(3)
+            tp_ok, sl_ok = False, False
+            for attempt in range(3):
+                if not tp_ok:
+                    try:
+                        ok, _ = _place_tp_sl_with_retry(self.client, symbol, "profit_loss", final_tp1, hold_side, size)
+                        if ok:
+                            tp_ok = True
+                            logger.info(f"✅ Manual TP: {symbol} {final_tp1}")
+                    except Exception as e:
+                        logger.error(f"Manual TP error {symbol}: {e}")
+                if not sl_ok:
+                    try:
+                        ok, _ = _place_tp_sl_with_retry(self.client, symbol, "loss_plan", final_sl, hold_side, size)
+                        if ok:
+                            sl_ok = True
+                            logger.info(f"✅ Manual SL: {symbol} {final_sl}")
+                    except Exception as e:
+                        logger.error(f"Manual SL error {symbol}: {e}")
+                if tp_ok and sl_ok:
+                    break
+                if attempt < 2:
+                    await asyncio.sleep(2)
+            if not (tp_ok and sl_ok):
+                logger.warning(f"⚠️ {symbol} manual TP/SL to'liq qo'yilmadi (TP:{tp_ok} SL:{sl_ok})")
 
         trade_info = {
             "symbol": symbol, "direction": dir_,
