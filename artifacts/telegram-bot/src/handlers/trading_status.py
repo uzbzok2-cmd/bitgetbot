@@ -64,8 +64,8 @@ def _build_status_text() -> str:
     zocker_icon      = _status_icon(gs.zocker_enabled)
     zocker_ntf_icon  = "🔔 YOQILGAN" if gs.zocker_notify else "🔕 O'CHIRILGAN"
     zokpat_icon      = _status_icon(gs.zokpat_enabled)
-    trend_break_icon = _status_icon(gs.trend_break_enabled)
     auto_icon        = _status_icon(gs.auto_trade_enabled)
+    trend_break_icon = _status_icon(getattr(gs, "trend_break_enabled", False))
 
     return (
         f"🤖 <b>BOT JONLI HOLATI</b>\n{'═'*28}\n"
@@ -78,7 +78,7 @@ def _build_status_text() -> str:
         f"🕯️ <b>Zocker Signal:</b> {zocker_icon}\n"
         f"🔔 <b>Zocker Xabarnoma:</b> {zocker_ntf_icon}\n"
         f"🔮 <b>ZOKPAT Pattern:</b> {zokpat_icon}\n"
-        f"🔷 <b>Trend Buzish:</b> {trend_break_icon}\n"
+        f"🔷 <b>Trend Buzish (W):</b> {trend_break_icon}\n"
         f"📊 <b>Max pozitsiyalar:</b> <code>{gs.MAX_AUTO_POSITIONS} ta</code>\n"
         f"{progress}{trades_text}{log_text}\n"
         f"{'─'*28}\n"
@@ -87,19 +87,20 @@ def _build_status_text() -> str:
 
 
 def _build_keyboard() -> InlineKeyboardMarkup:
-    auto_btn    = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled  else "🟢 Avtosavdoni Yoqish"
-    top_btn     = "🔴 Top Signals O'chirish" if gs.top_signals_enabled else "🟢 Top Signals Yoqish"
-    zocker_btn  = "🔴 Zocker Savdo O'ch."    if gs.zocker_enabled      else "🟢 Zocker Savdo Yoq."
-    zntf_btn    = "🔕 Zocker Xabar O'ch."    if gs.zocker_notify       else "🔔 Zocker Xabar Yoq."
-    zokpat_btn  = "🔴 ZOKPAT O'chirish"      if gs.zokpat_enabled      else "🟢 ZOKPAT Yoqish"
-    tb_btn      = "🔴 Trend Buzish O'ch."    if gs.trend_break_enabled else "🟢 Trend Buzish Yoq."
+    auto_btn     = "🔴 Avtosavdoni O'chirish" if gs.auto_trade_enabled  else "🟢 Avtosavdoni Yoqish"
+    top_btn      = "🔴 Top Signals O'chirish" if gs.top_signals_enabled else "🟢 Top Signals Yoqish"
+    zocker_btn   = "🔴 Zocker Savdo O'ch."    if gs.zocker_enabled      else "🟢 Zocker Savdo Yoq."
+    zntf_btn     = "🔕 Zocker Xabar O'ch."    if gs.zocker_notify       else "🔔 Zocker Xabar Yoq."
+    zokpat_btn   = "🔴 ZOKPAT O'chirish"      if gs.zokpat_enabled      else "🟢 ZOKPAT Yoqish"
+    tb_enabled   = getattr(gs, "trend_break_enabled", False)
+    tb_btn       = "🔴 Trend Buzish O'ch."    if tb_enabled             else "🟢 Trend Buzish Yoq."
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(auto_btn,   callback_data="toggle_autotrade")],
-        [InlineKeyboardButton(top_btn,    callback_data="toggle_top_signals")],
-        [InlineKeyboardButton(zocker_btn, callback_data="toggle_zocker"),
-         InlineKeyboardButton(zntf_btn,   callback_data="toggle_zocker_notify")],
-        [InlineKeyboardButton(zokpat_btn, callback_data="toggle_zokpat"),
-         InlineKeyboardButton(tb_btn,     callback_data="toggle_trend_break")],
+        [InlineKeyboardButton(auto_btn,    callback_data="toggle_autotrade")],
+        [InlineKeyboardButton(top_btn,     callback_data="toggle_top_signals")],
+        [InlineKeyboardButton(zocker_btn,  callback_data="toggle_zocker"),
+         InlineKeyboardButton(zntf_btn,    callback_data="toggle_zocker_notify")],
+        [InlineKeyboardButton(zokpat_btn,  callback_data="toggle_zokpat"),
+         InlineKeyboardButton(tb_btn,      callback_data="toggle_trend_break")],
         [InlineKeyboardButton("🔄 Yangilash",  callback_data="trading_status"),
          InlineKeyboardButton("🏠 Bosh menyu", callback_data="main_menu")],
     ])
@@ -120,13 +121,15 @@ async def handle_toggle_autotrade(update: Update, context: ContextTypes.DEFAULT_
     gs.auto_trade_enabled = not gs.auto_trade_enabled
     # Umumiy o'chirilganda — barcha sub-toggle ham o'chadi
     if not gs.auto_trade_enabled:
-        gs.top_signals_enabled = False
-        gs.zocker_enabled      = False
-        gs.zokpat_enabled      = False
+        gs.top_signals_enabled     = False
+        gs.zocker_enabled          = False
+        gs.zokpat_enabled          = False
+        gs.trend_break_enabled     = False
     else:
-        gs.top_signals_enabled = True
-        gs.zocker_enabled      = True
-        gs.zokpat_enabled      = True
+        gs.top_signals_enabled     = True
+        gs.zocker_enabled          = True
+        gs.zokpat_enabled          = True
+        gs.trend_break_enabled     = True
     status = "🟢 YOQILDI" if gs.auto_trade_enabled else "🔴 O'CHIRILDI"
     await query.answer(f"Avtosavdo {status}!")
     await query.edit_message_text(
@@ -184,9 +187,10 @@ async def handle_toggle_zocker_notify(update: Update, context: ContextTypes.DEFA
 async def handle_toggle_zokpat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     gs.zokpat_enabled = not gs.zokpat_enabled
-    if not gs.zokpat_enabled and not gs.top_signals_enabled and not gs.zocker_enabled and not gs.trend_break_enabled:
+    tb = getattr(gs, "trend_break_enabled", False)
+    if not gs.zokpat_enabled and not gs.top_signals_enabled and not gs.zocker_enabled and not tb:
         gs.auto_trade_enabled = False
-    elif gs.zokpat_enabled or gs.top_signals_enabled or gs.zocker_enabled or gs.trend_break_enabled:
+    elif gs.zokpat_enabled or gs.top_signals_enabled or gs.zocker_enabled or tb:
         gs.auto_trade_enabled = True
     status = "🟢 YOQILDI" if gs.zokpat_enabled else "🔴 O'CHIRILDI"
     await query.answer(f"ZOKPAT Pattern {status}!")
@@ -199,7 +203,7 @@ async def handle_toggle_zokpat(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_toggle_trend_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    gs.trend_break_enabled = not gs.trend_break_enabled
+    gs.trend_break_enabled = not getattr(gs, "trend_break_enabled", False)
     if not gs.trend_break_enabled and not gs.top_signals_enabled and not gs.zocker_enabled and not gs.zokpat_enabled:
         gs.auto_trade_enabled = False
     elif gs.trend_break_enabled or gs.top_signals_enabled or gs.zocker_enabled or gs.zokpat_enabled:
