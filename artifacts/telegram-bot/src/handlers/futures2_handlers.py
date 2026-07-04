@@ -19,9 +19,8 @@ TAKER_FEE = 0.0006
 
 def futures2_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔮 ZOKPAT Signal",    callback_data="f2_zokpat"),
-         InlineKeyboardButton("🔷 Trend Buzish",     callback_data="f2_trend_break")],
-        [InlineKeyboardButton("📊 Pozitsiyalar",     callback_data="f2_positions"),
+        [InlineKeyboardButton("🔮 ZOKPAT Signal", callback_data="f2_zokpat")],
+        [InlineKeyboardButton("📊 Pozitsiyalar",   callback_data="f2_positions"),
          InlineKeyboardButton("📜 Pozitsiya Tarixi", callback_data="f2_history")],
         [InlineKeyboardButton("🔄 Yangilash", callback_data="section_futures2"),
          InlineKeyboardButton("🏠 Bosh",     callback_data="main_menu")],
