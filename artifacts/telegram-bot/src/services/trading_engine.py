@@ -81,43 +81,13 @@ class TradingEngine:
         self.active_futures_signals: Dict = {}
 
     async def _futures_balance(self) -> float:
-        """Cross margin uchun haqiqiy yangi pozitsiya uchun mavjud mablag'.
-        crossedMaxAvailable = Bitget'ning HAQIQIY ruxsat beradigan limiti.
-        0 = yangi pozitsiya uchun joy yo'q (mavjud pozitsiyalar zarar ko'rmoqda).
-        """
         try:
             d = self.client.get_futures_account()
             if d.get("code") == "00000":
-                data = d["data"]
-                # -1 = maydon mavjud emas (eski API), >= 0 = haqiqiy qiymat
-                crossed_max = safe_float(data.get("crossedMaxAvailable", -1))
-                available   = safe_float(data.get("available", 0))
-                if crossed_max >= 0:
-                    # 0 ham qaytaramiz — bu "yangi pozitsiya ochib bo'lmaydi" degan ma'no
-                    return crossed_max
-                # Maydon mavjud emas — available orqali fallback
-                return available
+                return safe_float(d["data"].get("available", 0))
         except Exception as e:
             logger.error(f"Balance error: {e}")
         return 0.0
-
-    async def _futures_balance_info(self) -> dict:
-        """To'liq balans ma'lumoti — xabar ko'rsatish uchun."""
-        try:
-            d = self.client.get_futures_account()
-            if d.get("code") == "00000":
-                data = d["data"]
-                return {
-                    "available":       safe_float(data.get("available", 0)),
-                    "crossed_max":     safe_float(data.get("crossedMaxAvailable", 0)),
-                    "equity":          safe_float(data.get("accountEquity", 0)),
-                    "unrealized_pl":   safe_float(data.get("unrealizedPL", 0)),
-                    "crossed_risk":    safe_float(data.get("crossedRiskRate", 0)),
-                    "crossed_margin":  safe_float(data.get("crossedMargin", 0)),
-                }
-        except Exception:
-            pass
-        return {}
 
     async def _open_positions_count(self) -> int:
         try:
@@ -136,37 +106,6 @@ class TradingEngine:
         except Exception:
             pass
         return 20
-
-    async def _set_and_confirm_leverage(self, symbol: str, target_lev: int) -> int:
-        """Leverage o'rnatib, haqiqiy qiymatini tasdiqlaydi. Cross margin uchun to'g'ri ishlaydi."""
-        # 1. Margin mode = cross
-        try:
-            self.client.set_margin_mode(symbol, "crossed")
-        except Exception:
-            pass
-
-        # 2. Cross margin: holdSide-siz (Bitget cross uchun to'g'ri yo'l)
-        r = self.client.set_leverage_cross(symbol, target_lev)
-        if r.get("code") == "00000":
-            logger.info(f"✅ Leverage cross set: {symbol} {target_lev}x")
-        else:
-            # 3. Fallback: holdSide bilan (isolated uslubida)
-            r1 = self.client.set_leverage(symbol, target_lev, hold_side="long")
-            r2 = self.client.set_leverage(symbol, target_lev, hold_side="short")
-            logger.info(f"Leverage holdSide: {symbol} long={r1.get('code')} short={r2.get('code')}")
-
-        # 4. Tasdiqlash — haqiqiy leverage'ni o'qiymiz
-        try:
-            sym_acc = self.client.get_futures_symbol_account(symbol)
-            if sym_acc.get("code") == "00000":
-                confirmed = int(safe_float(sym_acc["data"].get("leverage", target_lev)))
-                if confirmed > 0:
-                    logger.info(f"✅ Confirmed leverage {symbol}: {confirmed}x")
-                    return confirmed
-        except Exception as e:
-            logger.warning(f"Leverage confirm error {symbol}: {e}")
-
-        return target_lev  # tasdiqlash muvaffaqiyatsiz bo'lsa, target'ni ishlatamiz
 
     async def _top_futures_symbols(self, n: int = 30) -> List[str]:
         try:
@@ -249,8 +188,7 @@ class TradingEngine:
                 # 70%+ — faqat avtosavdo (signal xabarlari BLOK)
                 if conf >= SIGNAL_NOTIFY_THRESHOLD:
                     if (gs.auto_trade_enabled and
-                            gs.top_signals_enabled and
-                            open_count < gs.MAX_AUTO_POSITIONS and
+                            open_count < MAX_FUTURES_ORDERS and
                             balance >= MIN_ORDER_USDT and
                             symbol not in self.active_futures_signals):
                         gs.scanner.add_log(f"⚡ Savdo: {symbol} {sig['direction']} {conf}%")
@@ -272,7 +210,13 @@ class TradingEngine:
         entry  = signal["entry"]
         atr    = signal["atr"]
         max_lev = await self._get_max_leverage(symbol)
-        confirmed_lev = await self._set_and_confirm_leverage(symbol, max_lev)
+
+        try:
+            self.client.set_margin_mode(symbol, "crossed")
+            self.client.set_leverage(symbol, max_lev, hold_side="long")
+            self.client.set_leverage(symbol, max_lev, hold_side="short")
+        except Exception:
+            pass
 
         commission = 0.0006 * 2   # taker fee × 2 (ochish + yopish), leverage QUSHILMAYDI
         atr_r = atr / entry
@@ -297,7 +241,7 @@ class TradingEngine:
             if final_sl >= entry:
                 final_sl  = round(entry * (1 - atr_r * 1.5), 8)
 
-        size = order_usdt * confirmed_lev / entry
+        size = order_usdt * max_lev / entry
         try:
             d = self.client.get_futures_contract_info(symbol)
             if d.get("code") == "00000":
@@ -323,40 +267,28 @@ class TradingEngine:
             return
 
         order_id = result.get("data", {}).get("orderId", "")
-        logger.info(f"✅ Order: {symbol} {dir_} {size} @ {confirmed_lev}x")
-        gs.scanner.add_log(f"✅ Savdo: {symbol} {dir_} {confirmed_lev}x")
+        logger.info(f"✅ Order: {symbol} {dir_} {size} @ {max_lev}x")
+        gs.scanner.add_log(f"✅ Savdo: {symbol} {dir_} {max_lev}x")
 
         self.active_futures_signals[symbol] = {
-            "signal": signal, "order_id": order_id, "leverage": confirmed_lev,
+            "signal": signal, "order_id": order_id, "leverage": max_lev,
             "size": size, "margin": order_usdt, "open_time": int(time.time())
         }
         gs.scanner.active_trades[symbol] = {
-            "symbol": symbol, "direction": dir_, "leverage": confirmed_lev,
+            "symbol": symbol, "direction": dir_, "leverage": max_lev,
             "size": size, "margin": order_usdt, "entry": entry,
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
 
-        # TP qo'y — muvaffaqiyatsiz bo'lsa pozitsiyani yop
-        tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_profit", final_tp1, hold_side, size)
-        if not tp_ok:
-            logger.error(f"❌ {symbol} TP qo'yilmadi — pozitsiya YOPILMOQDA")
-            gs.scanner.add_log(f"❌ {symbol} TP fail → rollback")
-            self.client.close_futures_position(symbol, hold_side)
-            self.active_futures_signals.pop(symbol, None)
-            gs.scanner.active_trades.pop(symbol, None)
-            return
-
-        # SL qo'y — muvaffaqiyatsiz bo'lsa TP ni bekor qil va pozitsiyani yop
-        sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_loss", final_sl, hold_side, size)
-        if not sl_ok:
-            logger.error(f"❌ {symbol} SL qo'yilmadi — pozitsiya YOPILMOQDA")
-            gs.scanner.add_log(f"❌ {symbol} SL fail → rollback")
-            self.client.close_futures_position(symbol, hold_side)
-            self.active_futures_signals.pop(symbol, None)
-            gs.scanner.active_trades.pop(symbol, None)
-            return
-
-        logger.info(f"✅ {symbol} TP={final_tp1} SL={final_sl} qo'yildi")
+        # TP1 = 100% of position, SL = 100%
+        for plan_type, trig, sz in [
+            ("profit_loss", final_tp1, size),
+            ("loss_plan",   final_sl,  size),
+        ]:
+            try:
+                _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+            except Exception as e:
+                logger.error(f"TP/SL error {symbol}: {e}")
 
         if self.bot and gs.notifier_chat_id:
             from utils.formatters import format_auto_trade_notify
@@ -397,30 +329,19 @@ class TradingEngine:
         if entry <= 0:
             return None, "Kirish narxi noto'g'ri (0)"
 
-        # ── Haqiqiy balansni ol (crossedMaxAvailable) ──────────
-        bal_info = await self._futures_balance_info()
-        balance  = await self._futures_balance()
-        if balance <= 0.5:
-            crossed_max = bal_info.get("crossed_max", 0)
-            equity      = bal_info.get("equity", 0)
-            unr_pl      = bal_info.get("unrealized_pl", 0)
-            risk        = bal_info.get("crossed_risk", 0) * 100
-            return None, (
-                f"⚠️ <b>Yangi pozitsiya uchun mablag' yo'q</b>\n\n"
-                f"📊 <b>Holat:</b>\n"
-                f"• Hisob kapitali: <b>{equity:.2f} USDT</b>\n"
-                f"• Unrealized PnL: <b>{unr_pl:+.2f} USDT</b>\n"
-                f"• Risk darajasi: <b>{risk:.1f}%</b>\n"
-                f"• Yangi pozitsiya limiti: <b>{crossed_max:.2f} USDT</b>\n\n"
-                f"💡 <b>Sabab:</b> Mavjud pozitsiyalar zarar ko'rmoqda.\n"
-                f"Yangi pozitsiya ochish uchun:\n"
-                f"• Ba'zi ochiq pozitsiyalarni yoping\n"
-                f"• Yoki hisobga USDT qo'shing"
-            )
+        # ── Haqiqiy balansni ol ──────────────────────────────
+        balance = await self._futures_balance()
+        if balance <= 0:
+            return None, "Balans olinmadi, qayta urining"
 
         max_lev = await self._get_max_leverage(symbol)
-        # Leverage o'rnat va haqiqiy qiymatni tasdiqla (cross margin uchun to'g'ri yo'l)
-        confirmed_lev = await self._set_and_confirm_leverage(symbol, max_lev)
+
+        try:
+            self.client.set_margin_mode(symbol, "crossed")
+            self.client.set_leverage(symbol, max_lev, hold_side="long")
+            self.client.set_leverage(symbol, max_lev, hold_side="short")
+        except Exception:
+            pass
 
         commission = 0.0006 * 2
         atr_r = atr / entry if entry > 0 else 0.02
@@ -468,27 +389,29 @@ class TradingEngine:
         except Exception:
             pass
 
-        # ── Minimal marja tekshiruvi (confirmed_lev bilan) ─────────────
-        min_margin_needed = min_size * entry / confirmed_lev
+        # ── Minimal marja tekshiruvi ────────────────────────
+        # 1 minimal kontrakt nechchi USDT marja talab qiladi?
+        min_margin_needed = min_size * entry / max_lev
         if order_usdt < min_margin_needed * 0.99:
             return None, (
                 f"⚠️ <b>{symbol}</b> uchun minimal savdo:\n"
-                f"• 1 kontrakt = <b>{min_margin_needed:.4f} USDT</b> marja ({confirmed_lev}x leverage)\n"
+                f"• 1 kontrakt = <b>{min_margin_needed:.2f} USDT</b> marja\n"
                 f"• Siz kiritdingiz: <b>{order_usdt:.2f} USDT</b>\n\n"
                 f"Kamida <b>{math.ceil(min_margin_needed)}</b> USDT kiriting."
             )
 
-        # ── Hajm hisoblash — confirmed_lev ishlatamiz ───────────────────
-        raw_size  = order_usdt * confirmed_lev / entry
-        lots      = max(1, math.floor(raw_size / min_size))
-        size      = lots * min_size
+        # ── Hajm hisoblash (floor — hech qachon balansdan oshmasin) ─
+        raw_size  = order_usdt * max_lev / entry
+        lots      = max(1, math.floor(raw_size / min_size))   # butun "lot" soni
+        size      = lots * min_size                            # aniq lot × min_size
 
-        # ── Balans tekshiruvi ───────────────────────────────────────────
-        actual_margin = size * entry / confirmed_lev
+        # ── Balans tekshiruvi ───────────────────────────────
+        actual_margin = size * entry / max_lev
         if actual_margin > balance * 0.90:
-            lots = max(1, math.floor(balance * 0.85 * confirmed_lev / entry / min_size))
+            # Kamroq lot ishlatish
+            lots = max(1, math.floor(balance * 0.85 * max_lev / entry / min_size))
             size = lots * min_size
-            actual_margin = size * entry / confirmed_lev
+            actual_margin = size * entry / max_lev
             if actual_margin > balance * 0.90:
                 return None, (
                     f"⚠️ Balans yetarli emas.\n"
@@ -501,7 +424,7 @@ class TradingEngine:
         if size <= 0:
             return None, "Hajm 0 dan kichik"
 
-        logger.info(f"Manual trade: {symbol} {dir_} size={size} lev={confirmed_lev}x margin={actual_margin:.2f} balance={balance:.2f}")
+        logger.info(f"Manual trade: {symbol} {dir_} size={size} margin={actual_margin:.2f} balance={balance:.2f}")
 
         result = self.client.place_futures_order(
             symbol=symbol, side=side, trade_side="open",
@@ -509,57 +432,28 @@ class TradingEngine:
         )
         if result.get("code") != "00000":
             err_msg = result.get("msg", "Order xatosi")
-            err_lower = err_msg.lower()
-            # crossedMaxAvailable=0 yoki "exceeds balance" xatosi
-            if "balance" in err_lower or "exceed" in err_lower or "40762" in str(result.get("code", "")):
-                bal_info2 = await self._futures_balance_info()
-                crossed   = bal_info2.get("crossed_max", 0)
-                equity2   = bal_info2.get("equity", 0)
-                unr2      = bal_info2.get("unrealized_pl", 0)
-                risk2     = bal_info2.get("crossed_risk", 0) * 100
+            # "exceeds balance" → aniqroq xabar ko'rsat
+            if "balance" in err_msg.lower() or "exceed" in err_msg.lower():
                 return None, (
-                    f"❌ <b>Order rad etildi (Bitget)</b>\n\n"
-                    f"📊 <b>Hisob holati:</b>\n"
-                    f"• Kapital: <b>{equity2:.2f} USDT</b>\n"
-                    f"• Unrealized PnL: <b>{unr2:+.2f} USDT</b>\n"
-                    f"• Risk darajasi: <b>{risk2:.1f}%</b>\n"
-                    f"• Yangi pozitsiya limiti (crossedMaxAvailable): <b>{crossed:.2f} USDT</b>\n\n"
-                    f"💡 <b>Sabab:</b> Mavjud ochiq pozitsiyalar zarar ko'rmoqda,\n"
-                    f"Bitget cross margin yangi pozitsiya ochishga ruxsat bermayapti.\n\n"
-                    f"<b>Yechim:</b>\n"
-                    f"• Zarar ko'rayotgan pozitsiyalarni yoping\n"
-                    f"• Yoki hisobga ko'proq USDT qo'shing"
+                    f"⚠️ Marja yetarli emas.\n"
+                    f"• Zarur: <b>{actual_margin:.2f} USDT</b>\n"
+                    f"• Mavjud: <b>{balance:.2f} USDT</b>\n"
+                    f"• Minimal: <b>{math.ceil(min_margin_needed)} USDT</b> kiriting."
                 )
-            return None, f"❌ {err_msg}"
+            return None, err_msg
 
         order_id = result.get("data", {}).get("orderId", "")
-        logger.info(f"✅ Manual order: {symbol} {dir_} {size} @ {confirmed_lev}x — TP/SL qo'yilmoqda...")
 
-        # TP va SL MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
+        # TP1 = 100% position, SL = 100%
         if symbol not in SKIP_TP_SL_SYMBOLS:
-            tp_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_profit", final_tp1, hold_side, size)
-            if not tp_ok:
-                logger.error(f"❌ Manual {symbol} TP qo'yilmadi — ROLLBACK")
-                self.client.close_futures_position(symbol, hold_side)
-                return None, (
-                    f"❌ <b>TP qo'yilmadi — pozitsiya BEKOR QILINDI</b>\n\n"
-                    f"• {symbol} {dir_} pozitsiyasi avtomatik yopildi\n"
-                    f"• Sabab: TP order Bitget tomonidan rad etildi\n"
-                    f"• Keyinroq qayta urining"
-                )
-
-            sl_ok, _ = _place_tp_sl_with_retry(self.client, symbol, "pos_loss", final_sl, hold_side, size)
-            if not sl_ok:
-                logger.error(f"❌ Manual {symbol} SL qo'yilmadi — ROLLBACK")
-                self.client.close_futures_position(symbol, hold_side)
-                return None, (
-                    f"❌ <b>SL qo'yilmadi — pozitsiya BEKOR QILINDI</b>\n\n"
-                    f"• {symbol} {dir_} pozitsiyasi avtomatik yopildi\n"
-                    f"• Sabab: SL order Bitget tomonidan rad etildi\n"
-                    f"• Keyinroq qayta urining"
-                )
-
-            logger.info(f"✅ Manual {symbol} TP={final_tp1} SL={final_sl} — muvaffaqiyatli")
+            for plan_type, trig, sz in [
+                ("profit_loss", final_tp1, size),
+                ("loss_plan",   final_sl,  size),
+            ]:
+                try:
+                    _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+                except Exception as e:
+                    logger.error(f"Manual TP/SL error {symbol}: {e}")
 
         trade_info = {
             "symbol": symbol, "direction": dir_,
@@ -659,8 +553,8 @@ class TradingEngine:
                     # TP1 = 100%, SL = 100%
                     success = True
                     for plan_type, trig, sz in [
-                        ("pos_profit", tp1, size),
-                        ("pos_loss",   sl,  size),
+                        ("profit_loss", tp1, size),
+                        ("loss_plan",   sl,  size),
                     ]:
                         ok, _ = _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
                         if ok:
