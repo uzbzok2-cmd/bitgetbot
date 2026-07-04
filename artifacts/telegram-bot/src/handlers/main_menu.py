@@ -37,8 +37,10 @@ def bottom_reply_keyboard():
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("📈 FYUCHERS"), KeyboardButton("🚀 FYUCHERS 2"),
-             KeyboardButton("🧠 AI Chat"), KeyboardButton("🪙 SPOT")],
-            [KeyboardButton("🤖 Bot Holati"), KeyboardButton("📜 Signal Tarixi")],
+             KeyboardButton("🪙 SPOT")],
+            [KeyboardButton("🧠 AI Chat"), KeyboardButton("🔷 Trend Buzish"),
+             KeyboardButton("🤖 Bot Holati")],
+            [KeyboardButton("📜 Signal Tarixi")],
             [KeyboardButton("📊 BTC"), KeyboardButton("📊 ETH"),
              KeyboardButton("💎 PAXG"), KeyboardButton("🥇 XAUT"), KeyboardButton("🛢️ CL")],
             [KeyboardButton("🔍 Hozir Signal Ol")],
