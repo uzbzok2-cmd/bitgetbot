@@ -1,89 +1,156 @@
-"""GitHub sync service — commits changes to bitgetbot repo."""
+"""GitHub sync — GitHub REST API orqali fayllarni push qiladi (subprocess git yo'q)."""
 import os
-import subprocess
+import base64
 import logging
+import asyncio
+import aiohttp
 import time
 from pathlib import Path
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import GITHUB_TOKEN, GITHUB_USERNAME, GITHUB_REPO
 
 logger = logging.getLogger(__name__)
 
-BOT_DIR = Path(__file__).parent.parent.parent
+GITHUB_USERNAME = "uzbzok2-cmd"
+GITHUB_REPO = "bitgetbot"
+GITHUB_BRANCH = "main"
+WORKSPACE = Path("/home/runner/workspace")
+
+BOT_FILES = [
+    "artifacts/telegram-bot/src/bot.py",
+    "artifacts/telegram-bot/src/config.py",
+    "artifacts/telegram-bot/src/handlers/main_menu.py",
+    "artifacts/telegram-bot/src/handlers/callback_router.py",
+    "artifacts/telegram-bot/src/handlers/trading_status.py",
+    "artifacts/telegram-bot/src/handlers/futures2_handlers.py",
+    "artifacts/telegram-bot/src/handlers/ai_chat.py",
+    "artifacts/telegram-bot/src/handlers/zocker_signal.py",
+    "artifacts/telegram-bot/src/handlers/zokpat_scanner.py",
+    "artifacts/telegram-bot/src/services/analyzer.py",
+    "artifacts/telegram-bot/src/services/bitget_client.py",
+    "artifacts/telegram-bot/src/services/chart_generator.py",
+    "artifacts/telegram-bot/src/services/github_sync.py",
+    "artifacts/telegram-bot/src/services/pattern_analyzer.py",
+    "artifacts/telegram-bot/src/services/state.py",
+    "artifacts/telegram-bot/src/services/trading_engine.py",
+    "artifacts/telegram-bot/src/utils/formatters.py",
+]
 
 
-def run(cmd: list, cwd=None) -> tuple:
+def _get_token():
+    return os.environ.get("GITHUB_TOKEN", "")
+
+
+async def _get_file_sha(session: aiohttp.ClientSession, token: str, path: str) -> str | None:
+    """GitHub'dagi fayl SHA sini oladi (mavjud bo'lsa)."""
+    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{path}"
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=cwd or str(BOT_DIR)
-        )
-        return result.returncode, result.stdout.strip(), result.stderr.strip()
-    except Exception as e:
-        return -1, "", str(e)
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get("sha")
+    except Exception:
+        pass
+    return None
 
 
-def setup_git_repo():
-    """Initialize git and connect to GitHub remote."""
-    if not GITHUB_TOKEN or not GITHUB_USERNAME:
-        logger.warning("GitHub credentials missing, skipping git setup")
+async def _push_file(session: aiohttp.ClientSession, token: str, rel_path: str, message: str) -> bool:
+    """Bitta faylni GitHub'ga push qiladi."""
+    local_path = WORKSPACE / rel_path
+    if not local_path.exists():
         return False
 
-    remote_url = f"https://{GITHUB_USERNAME}:{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{GITHUB_REPO}.git"
-    workspace = Path("/home/runner/workspace")
+    try:
+        content = local_path.read_bytes()
+        encoded = base64.b64encode(content).decode()
+    except Exception as e:
+        logger.warning(f"Fayl o'qilmadi {rel_path}: {e}")
+        return False
 
-    # Configure git
-    run(["git", "config", "--global", "user.email", "bitgetbot@replit.com"], cwd=str(workspace))
-    run(["git", "config", "--global", "user.name", "BitgetBot AI"])
-    run(["git", "config", "--global", "init.defaultBranch", "main"])
+    sha = await _get_file_sha(session, token, rel_path)
 
-    # Check if remote exists
-    code, out, _ = run(["git", "remote", "get-url", "github"], cwd=str(workspace))
-    if code != 0:
-        run(["git", "remote", "add", "github", remote_url], cwd=str(workspace))
-    else:
-        run(["git", "remote", "set-url", "github", remote_url], cwd=str(workspace))
+    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{rel_path}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "message": message,
+        "content": encoded,
+        "branch": GITHUB_BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha
 
-    logger.info("Git remote configured")
-    return True
+    try:
+        async with session.put(url, headers=headers, json=payload) as resp:
+            if resp.status in (200, 201):
+                return True
+            else:
+                text = await resp.text()
+                logger.warning(f"Push xato {rel_path}: {resp.status} — {text[:200]}")
+                return False
+    except Exception as e:
+        logger.warning(f"Push exception {rel_path}: {e}")
+        return False
+
+
+async def push_all_files(message: str = None):
+    """Barcha bot fayllarini GitHub'ga push qiladi."""
+    token = _get_token()
+    if not token:
+        logger.warning("GITHUB_TOKEN yo'q — push o'tkazib yuborildi")
+        return False
+
+    msg = message or f"🤖 BitgetBot update — {time.strftime('%Y-%m-%d %H:%M')}"
+    success = 0
+    failed = 0
+
+    async with aiohttp.ClientSession() as session:
+        for rel_path in BOT_FILES:
+            ok = await _push_file(session, token, rel_path, msg)
+            if ok:
+                success += 1
+            else:
+                failed += 1
+            await asyncio.sleep(0.3)  # Rate limit uchun
+
+    logger.info(f"✅ GitHub push tugadi: {success} ta muvaffaqiyatli, {failed} ta xato")
+    return success > 0
 
 
 def commit_and_push(message: str = None):
-    """Commit all changes and push to GitHub."""
-    if not GITHUB_TOKEN or not GITHUB_USERNAME:
+    """Sync wrapper (bot.py initial_push uchun)."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(push_all_files(message))
+            return True
+        else:
+            return loop.run_until_complete(push_all_files(message))
+    except Exception as e:
+        logger.error(f"commit_and_push xato: {e}")
         return False
 
-    workspace = Path("/home/runner/workspace")
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    msg = message or f"🤖 Bot update — {timestamp}"
 
-    # Stage all changes
-    run(["git", "add", "-A"], cwd=str(workspace))
-
-    # Check if there's anything to commit
-    code, out, _ = run(["git", "diff", "--cached", "--quiet"], cwd=str(workspace))
-    if code == 0:
-        logger.info("Nothing new to commit — pushing existing commits to GitHub...")
-    else:
-        # Commit new changes
-        code, out, err = run(["git", "commit", "-m", msg], cwd=str(workspace))
-        if code != 0:
-            logger.error(f"Git commit failed: {err}")
-            return False
-        logger.info(f"✅ Committed: {msg}")
-
-    # Always push (even if nothing new to commit — existing commits may not be on remote)
-    code, out, err = run(["git", "push", "github", "HEAD:main", "--force"], cwd=str(workspace))
-    if code != 0:
-        logger.warning(f"Git push failed: {err}")
-        return False
-
-    logger.info(f"✅ Pushed to GitHub: {msg}")
+def setup_git_repo():
+    """Eski git-based setup — endi kerak emas, API ishlatamiz."""
+    logger.info("GitHub API sync yoqilgan (subprocess git yo'q)")
     return True
 
 
 def initial_push():
-    """Initial setup push."""
+    """Botni ishga tushirganda dastlabki push."""
     setup_git_repo()
-    return commit_and_push("🚀 Initial bot setup — BitgetBot AI Trading")
+    return commit_and_push("🔮 ZOKPAT scanner, AI Chat, FYUCHERS 2 — BitgetBot AI v2.0")
+
+
+async def run_periodic_sync():
+    """30 daqiqada bir marta GitHub'ga push qiladi."""
+    await asyncio.sleep(60)  # Birinchi 1 daqiqada push
+    while True:
+        try:
+            await push_all_files()
+        except Exception as e:
+            logger.error(f"Periodic sync xato: {e}")
+        await asyncio.sleep(1800)  # 30 daqiqa
