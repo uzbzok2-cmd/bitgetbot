@@ -10,11 +10,12 @@ authenticated_users: Set[int] = set()
 ai_chat_users: Set[int]       = set()   # AI Chat modeda turgan userlar
 
 # ── Auto-trade toggles ────────────────────────────────────────────────
-auto_trade_enabled: bool  = True     # Umumiy avtosavdo (Top Signals 70%+)
-zocker_enabled: bool      = True     # Zocker Signal avtosavdo
+auto_trade_enabled: bool  = False    # Umumiy avtosavdo — har restartda O'CHIQ
+zocker_enabled: bool      = False    # Zocker Signal avtosavdo — O'CHIQ
 zocker_notify: bool       = True     # Zocker Signal xabarnomalar (chart+alert)
-top_signals_enabled: bool = True     # Top Signals (70%+) avtosavdo
-zokpat_enabled: bool      = True     # ZOKPAT Pattern Signal avtosavdo
+top_signals_enabled: bool = False    # Top Signals (70%+) avtosavdo — O'CHIQ
+zokpat_enabled: bool      = False    # ZOKPAT Pattern Signal avtosavdo — O'CHIQ
+trend_break_enabled: bool = False    # Trend Buzish (W-Pattern) avtosavdo — O'CHIQ
 
 # ── Max avtomatik pozitsiyalar ─────────────────────────────────────────
 MAX_AUTO_POSITIONS: int = 6          # Bir vaqtda maksimal ochiq pozitsiyalar (siz 3 + bot 3)
