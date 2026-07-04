@@ -298,36 +298,20 @@ class ZockerScanner:
 
         await self._send_alert(symbol, tf, direction, count, raw, entry, tp, sl)
 
-        if gs.auto_trade_enabled and gs.zocker_enabled and entry > 0:
+        if gs.auto_trade_enabled and entry > 0:
             await self._auto_trade(symbol, tf, direction, entry, tp, sl, atr, count)
 
     async def _auto_trade(self, symbol: str, tf: str, direction: str,
                            entry: float, tp: float, sl: float, atr: float, count: int):
         """Zocker signali uchun avtomatik pozitsiya ochish."""
         try:
-            # Maksimal 3 ta ochiq pozitsiya tekshiruvi
-            pos_d = self.client.get_futures_positions()
-            if pos_d.get("code") == "00000":
-                open_count = sum(1 for p in pos_d.get("data", [])
-                                 if safe_float(p.get("total", 0)) > 0)
-                if open_count >= gs.MAX_AUTO_POSITIONS:
-                    logger.info(f"Zocker {symbol}: {open_count} ta ochiq pozitsiya (limit {gs.MAX_AUTO_POSITIONS}) — o'tkazib yuborildi")
-                    gs.scanner.add_log(f"⏸️ Zocker {symbol}: limit {gs.MAX_AUTO_POSITIONS} ta → o'tkazildi")
-                    return
-
             acc = self.client.get_futures_account()
             if acc.get("code") != "00000":
                 logger.warning("Zocker auto-trade: balans olinmadi")
                 return
-            acc_data = acc["data"]
-            # crossedMaxAvailable — Bitget'ning haqiqiy cross margin limiti (0=yangi pozitsiya yo'q)
-            crossed_max = safe_float(acc_data.get("crossedMaxAvailable", -1))
-            if crossed_max >= 0:
-                balance = crossed_max  # haqiqiy limit
-            else:
-                balance = safe_float(acc_data.get("available", 0))  # fallback
+            balance = safe_float(acc["data"].get("available", 0))
             if balance < 1.0:
-                logger.warning(f"Zocker auto-trade: crossedMaxAvailable kam ({balance:.2f})")
+                logger.warning(f"Zocker auto-trade: balans kam ({balance:.2f})")
                 return
 
             from config import MIN_ORDER_USDT, MAX_ORDER_USDT
@@ -342,26 +326,17 @@ class ZockerScanner:
             except Exception:
                 pass
 
-            # Cross margin uchun to'g'ri leverage o'rnatish va tasdiqlash
-            confirmed_lev = max_lev
             try:
                 self.client.set_margin_mode(symbol, "crossed")
-                r = self.client.set_leverage_cross(symbol, max_lev)
-                if r.get("code") != "00000":
-                    self.client.set_leverage(symbol, max_lev, hold_side="long")
-                    self.client.set_leverage(symbol, max_lev, hold_side="short")
-                sym_acc = self.client.get_futures_symbol_account(symbol)
-                if sym_acc.get("code") == "00000":
-                    lev_val = int(safe_float(sym_acc["data"].get("leverage", max_lev)))
-                    if lev_val > 0:
-                        confirmed_lev = lev_val
-            except Exception as e:
-                logger.warning(f"Zocker leverage set error {symbol}: {e}")
+                self.client.set_leverage(symbol, max_lev, hold_side="long")
+                self.client.set_leverage(symbol, max_lev, hold_side="short")
+            except Exception:
+                pass
 
             side      = "sell" if direction == "SHORT" else "buy"
             hold_side = "short" if direction == "SHORT" else "long"
 
-            size = order_usdt * confirmed_lev / entry
+            size = order_usdt * max_lev / entry
             try:
                 d = self.client.get_futures_contract_info(symbol)
                 if d.get("code") == "00000":
@@ -385,23 +360,8 @@ class ZockerScanner:
 
             gs.scanner.add_log(f"✅ Zocker savdo: {symbol} {direction} {max_lev}x")
 
-            # TP MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
-            tp_ok, _ = _place_tp_sl(self.client, symbol, "pos_profit", tp, hold_side, size)
-            if not tp_ok:
-                logger.error(f"❌ Zocker {symbol} TP qo'yilmadi — ROLLBACK")
-                gs.scanner.add_log(f"❌ Zocker {symbol} TP fail → rollback")
-                self.client.close_futures_position(symbol, hold_side)
-                return
-
-            # SL MAJBURIY — muvaffaqiyatsiz bo'lsa pozitsiyani darhol yop
-            sl_ok, _ = _place_tp_sl(self.client, symbol, "pos_loss", sl, hold_side, size)
-            if not sl_ok:
-                logger.error(f"❌ Zocker {symbol} SL qo'yilmadi — ROLLBACK")
-                gs.scanner.add_log(f"❌ Zocker {symbol} SL fail → rollback")
-                self.client.close_futures_position(symbol, hold_side)
-                return
-
-            logger.info(f"✅ Zocker {symbol} TP={tp} SL={sl} — muvaffaqiyatli")
+            _place_tp_sl(self.client, symbol, "profit_loss", tp, hold_side, size)
+            _place_tp_sl(self.client, symbol, "loss_plan",   sl, hold_side, size)
 
             if self.bot and gs.notifier_chat_id:
                 color_txt = "yashil" if direction == "SHORT" else "qizil"
@@ -437,9 +397,6 @@ class ZockerScanner:
         """Signal alert va chart yuborish."""
         if not self.bot or not gs.notifier_chat_id:
             return
-        if not gs.zocker_notify:
-            logger.info(f"Zocker xabarnomalar o'chirilgan — {symbol} o'tkazildi")
-            return
 
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -468,10 +425,8 @@ class ZockerScanner:
             if sl > 0:
                 text += f"🛑 SL: <code>${fmt_price(sl)}</code>  ({_pct_lev(sl, entry)})\n"
 
-        if gs.auto_trade_enabled and gs.zocker_enabled:
+        if gs.auto_trade_enabled:
             text += f"{'─'*28}\n⚡ <b>Avtomatik pozitsiya ochilmoqda...</b>"
-        elif not gs.zocker_enabled:
-            text += f"{'─'*28}\n⏸️ <i>Zocker avtosavdo o'chirilgan</i>"
         else:
             text += f"{'─'*28}\n⚠️ <i>Avtosavdo o'chirilgan — qo'lda kirish mumkin.</i>"
 
