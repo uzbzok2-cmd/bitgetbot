@@ -31,6 +31,9 @@ from handlers.futures2_handlers import (
     show_futures2_main, handle_zokpat_menu, handle_zokpat_scan_now,
     handle_f2_positions, handle_f2_history, handle_f2_history_period,
 )
+from handlers.trend_break_handlers import (
+    handle_trend_break_menu, handle_trend_break_scan_now,
+)
 from handlers.ai_chat import handle_ai_direction_callback
 from handlers.statistics import handle_statistics
 from handlers.settings import handle_settings_callback
@@ -129,12 +132,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_zokpat_menu(update, context)
     elif data == "zokpat_scan_now":
         await handle_zokpat_scan_now(update, context)
-    elif data == "f2_trend_break":
-        from handlers.trend_break_scanner import handle_trend_break_inline
-        await handle_trend_break_inline(update, context)
-    elif data == "tb_scan_now":
-        from handlers.trend_break_scanner import handle_trend_break_scan_now
-        await handle_trend_break_scan_now(update, context)
     elif data == "f2_positions":
         await handle_f2_positions(update, context)
     elif data == "f2_history":
@@ -181,6 +178,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_toggle_zokpat(update, context)
     elif data == "toggle_trend_break":
         await handle_toggle_trend_break(update, context)
+
+    # ── Trend Buzish ──────────────────────────────────────
+    elif data == "trend_break_menu":
+        await handle_trend_break_menu(update, context)
+    elif data == "trend_break_scan_now":
+        await handle_trend_break_scan_now(update, context)
 
     # ── AI Chat ───────────────────────────────────────────
     elif data == "ai_chat_exit":
