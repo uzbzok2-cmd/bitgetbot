@@ -5,7 +5,7 @@ BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
 BITGET_API_SECRET = os.environ.get("BITGET_API_SECRET", "")
 BITGET_API_PASSPHRASE = os.environ.get("BITGET_API_PASSPHRASE", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_USERNAME = os.environ.get("GITHUB_USERNAME", "")
+GITHUB_USERNAME = "uzbzok2-cmd"
 GITHUB_REPO = "bitgetbot"
 
 BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "OLLOBERGAN")
