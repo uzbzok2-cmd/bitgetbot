@@ -23,7 +23,7 @@ from handlers.spot_handlers import (
 from handlers.trading_status import (
     handle_trading_status, handle_toggle_autotrade,
     handle_toggle_top_signals, handle_toggle_zocker, handle_toggle_zocker_notify,
-    handle_toggle_zokpat,
+    handle_toggle_zokpat, handle_toggle_trend_break,
     handle_approve_signal, handle_reject_signal,
     handle_signal_history, handle_signal_history_all,
 )
@@ -129,6 +129,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_zokpat_menu(update, context)
     elif data == "zokpat_scan_now":
         await handle_zokpat_scan_now(update, context)
+    elif data == "f2_trend_break":
+        from handlers.trend_break_scanner import handle_trend_break_inline
+        await handle_trend_break_inline(update, context)
+    elif data == "tb_scan_now":
+        from handlers.trend_break_scanner import handle_trend_break_scan_now
+        await handle_trend_break_scan_now(update, context)
     elif data == "f2_positions":
         await handle_f2_positions(update, context)
     elif data == "f2_history":
@@ -173,6 +179,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_toggle_zocker_notify(update, context)
     elif data == "toggle_zokpat":
         await handle_toggle_zokpat(update, context)
+    elif data == "toggle_trend_break":
+        await handle_toggle_trend_break(update, context)
 
     # ── AI Chat ───────────────────────────────────────────
     elif data == "ai_chat_exit":
