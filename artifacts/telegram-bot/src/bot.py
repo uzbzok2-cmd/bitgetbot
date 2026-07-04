@@ -22,10 +22,10 @@ from telegram.ext import (
 from config import TELEGRAM_BOT_TOKEN
 from handlers.main_menu import start_command, handle_text_message
 from handlers.callback_router import callback_router
-from handlers.ai_chat import handle_ai_chat_photo, handle_ai_chat_text
+from handlers.ai_chat import handle_ai_chat_photo, handle_ai_chat_text, handle_ai_chat_entry
 from services.trading_engine import TradingEngine
 from services.bitget_client import BitgetClient
-from services.github_sync import initial_push, commit_and_push
+from services.github_sync import initial_push, run_periodic_sync
 from services import state as gs
 
 logging.basicConfig(
@@ -71,15 +71,8 @@ async def run_zocker_scanner(bot):
 
 
 async def run_github_sync():
-    """Push to GitHub every 30 minutes."""
-    while True:
-        await asyncio.sleep(1800)
-        try:
-            commit_and_push("🤖 Auto-sync")
-            logger.info("GitHub sync done")
-            gs.scanner.add_log("📦 GitHub sync done")
-        except Exception as e:
-            logger.error(f"GitHub sync error: {e}")
+    """Push to GitHub every 30 minutes via API."""
+    await run_periodic_sync()
 
 
 async def run_zokpat_scanner(bot):
