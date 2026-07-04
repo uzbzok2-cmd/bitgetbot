@@ -1,17 +1,17 @@
 """
-Trend Buzish Scanner — W-Pattern (Double Bottom + Neckline Breakout)
+Trend Buzish Scanner — Diagonal Trendline Breakout
 
-Pattern:
-  1 (high) → katta tushish
-  2 (low)  → birinchi dip
-  3 (neckline) → yuqoriga sakrash (1-candelning yarmigacha yetmagan)
-  4 (low2) → ikkinchi dip (2 ga yaqin, ±3%)
-  5 (breakout) → 3-candeldan yuqorida yopilishi KERAK
-                  1-candelning yarmigacha yetmagan bo'lishi KERAK
+Algoritm:
+  1. Oxirgi 2 ta pivot HIGH → Yuqori sariq trend chiziq (resistance)
+  2. Oxirgi 2 ta pivot LOW  → Pastki sariq trend chiziq (support)
+  3. Narx yuqori chiziqni 1-2 candle ichida buzsa → LONG
+  4. Narx pastki chiziqni 1-2 candle ichida buzsa → SHORT
+  5. Kechikkan (≥3 candle) signallar o'tkazib yuboriladi
 
-Entry: 5-nuqtada (close above neckline)
-TP:    Fibonacci 0.618 — 2-low dan 1-high gacha
-SL:    4-low dan 0.5% past
+TP/SL:
+  height = yuqori_chiziq - pastki_chiziq (buzilish nuqtasida)
+  TP = entry + height×0.5   (LONG) / entry - height×0.5 (SHORT)
+  SL = entry - (TP - entry) (1:1 RR)
 """
 import asyncio
 import io
@@ -26,11 +26,15 @@ from services import state as gs
 logger = logging.getLogger(__name__)
 
 SCAN_SYMBOLS_LIMIT = 60
-MIN_VOLUME = 500_000
-TF_CANDLES = {"15m": 150, "1H": 120, "4H": 100, "1D": 80}
-SCAN_TFS   = ["1H", "4H", "15m"]
-SCAN_INTERVAL = 300  # 5 daqiqa
+MIN_VOLUME         = 500_000
+TF_CANDLES         = {"15m": 120, "1H": 100, "4H": 80}
+SCAN_TFS           = ["1H", "4H", "15m"]
+SCAN_INTERVAL      = 300  # 5 daqiqa
 
+
+# ──────────────────────────────────────────────
+# Yordamchi funksiyalar
+# ──────────────────────────────────────────────
 
 def _scale(price: float) -> int:
     if price >= 10000: return 1
@@ -54,144 +58,181 @@ def _parse_candles(candles_data: list):
 
 
 def _find_pivots(highs, lows, window=3):
+    """Local pivot highs va lows topish."""
     peaks, troughs = [], []
     for i in range(window, len(highs) - window):
-        if all(highs[i] >= highs[i-j] for j in range(1, window+1)) and \
-           all(highs[i] >= highs[i+j] for j in range(1, window+1)):
+        if all(highs[i] >= highs[i - j] for j in range(1, window + 1)) and \
+           all(highs[i] >= highs[i + j] for j in range(1, window + 1)):
             peaks.append(i)
-        if all(lows[i] <= lows[i-j] for j in range(1, window+1)) and \
-           all(lows[i] <= lows[i+j] for j in range(1, window+1)):
+        if all(lows[i] <= lows[i - j] for j in range(1, window + 1)) and \
+           all(lows[i] <= lows[i + j] for j in range(1, window + 1)):
             troughs.append(i)
     return peaks, troughs
 
 
-def detect_w_pattern(candles_data: list, symbol: str, tf: str) -> Optional[Dict]:
-    """W-Pattern (Trend Buzish) aniqlash."""
+def _line_at(slope, intercept, x):
+    return slope * x + intercept
+
+
+# ──────────────────────────────────────────────
+# Asosiy aniqlash funksiyasi
+# ──────────────────────────────────────────────
+
+def detect_trendline_breakout(candles_data: list, symbol: str, tf: str) -> Optional[Dict]:
+    """
+    Ikki diagonal trend chiziqni aniqlaydi va 1-2 candle ichidagi
+    breakout signalini qaytaradi.
+    """
     H, L, C = _parse_candles(candles_data)
     n = len(C)
-    if n < 30:
+    if n < 40:
         return None
 
-    # Oxirgi 80 ta sham ichida qidirish
-    window = min(80, n)
+    window = min(100, n)
     H = H[-window:]
     L = L[-window:]
     C = C[-window:]
     w = len(H)
 
-    current_close = C[-1]
-    current_high  = H[-1]
-
-    # Pivot nuqtalarni topish
-    peaks, troughs = _find_pivots(H, L, window=2)
-
-    if len(peaks) < 1 or len(troughs) < 2:
+    # Pivot topish (window=3, keyin 2 ga fallback)
+    for pw in (3, 2):
+        peaks, troughs = _find_pivots(H, L, window=pw)
+        if len(peaks) >= 2 and len(troughs) >= 2:
+            break
+    else:
         return None
 
-    # P4 → P2 → P3 → P1 → P5 tartibida qidirish
-    for ti in range(len(troughs) - 1, 0, -1):
-        p4_idx = troughs[ti]
-        # P4 so'nggi 15 sham ichida bo'lishi kerak
-        if w - p4_idx > 15:
-            continue
-        p4_low = L[p4_idx]
+    # Oxirgi 2 ta pivot high → yuqori chiziq
+    ph1_i, ph2_i = int(peaks[-2]), int(peaks[-1])
+    ph1_v, ph2_v = float(H[ph1_i]), float(H[ph2_i])
 
-        for tj in range(ti - 1, -1, -1):
-            p2_idx = troughs[tj]
-            p2_low = L[p2_idx]
+    # Oxirgi 2 ta pivot low → pastki chiziq
+    pl1_i, pl2_i = int(troughs[-2]), int(troughs[-1])
+    pl1_v, pl2_v = float(L[pl1_i]), float(L[pl2_i])
 
-            # P2 va P4 orasida kamida 5 sham bo'lishi kerak
-            if p4_idx - p2_idx < 5:
-                continue
-            # P2 va P4 narxi ±3% ichida bo'lishi kerak
-            diff = abs(p4_low - p2_low) / p2_low
-            if diff > 0.03:
-                continue
+    # Trend chiziqlari tenglamalari
+    if ph2_i == ph1_i or pl2_i == pl1_i:
+        return None
 
-            # P3: P2 va P4 orasidagi eng baland peak
-            mid_peaks = [p for p in peaks if p2_idx < p < p4_idx]
-            if not mid_peaks:
-                continue
-            p3_idx = max(mid_peaks, key=lambda p: H[p])
-            p3_high = H[p3_idx]
+    up_slope = (ph2_v - ph1_v) / (ph2_i - ph1_i)
+    up_int   = ph1_v - up_slope * ph1_i
 
-            # P3 ikki dipdan yuqori bo'lishi kerak
-            if p3_high <= max(p2_low, p4_low) * 1.005:
-                continue
+    lo_slope = (pl2_v - pl1_v) / (pl2_i - pl1_i)
+    lo_int   = pl1_v - lo_slope * pl1_i
 
-            # P1: P2 dan oldingi eng baland nuqta
-            if p2_idx < 4:
-                continue
-            p1_idx = int(np.argmax(H[:p2_idx]))
-            p1_high = H[p1_idx]
+    curr = w - 1
+    prev = w - 2
 
-            # P1 P3 dan baland bo'lishi kerak
-            if p1_high <= p3_high * 1.01:
-                continue
+    up_curr = _line_at(up_slope, up_int, curr)
+    up_prev = _line_at(up_slope, up_int, prev)
+    lo_curr = _line_at(lo_slope, lo_int, curr)
+    lo_prev = _line_at(lo_slope, lo_int, prev)
 
-            # P3 P1-P2 midpoint dan past bo'lishi kerak
-            mid_1_2 = (p1_high + p2_low) / 2.0
-            if p3_high >= mid_1_2:
-                continue
+    # Kanal yaroqliligi tekshiruvi
+    if up_curr <= lo_curr:
+        return None
+    height = up_curr - lo_curr
+    if height / max(abs(lo_curr), 1e-12) < 0.005:  # juda tor kanal
+        return None
 
-            # P5 sharti 1: current_close P3 dan yuqori (neckline yorilishi)
-            if current_close <= p3_high:
-                continue
+    # ── Breakout aniqlash (max 2 candle kechikish) ──
+    direction = None
+    breakout_offset = 0  # necha candle oldin buzildi
 
-            # P5 sharti 2: current_close P1-P2 midpoint ga yetmagan
-            if current_close >= mid_1_2:
-                continue
+    # 1-candle kechikish: curr buzilgan
+    if C[curr] > up_curr and C[prev] <= _line_at(up_slope, up_int, prev) * 1.002:
+        direction = "LONG"
+        breakout_offset = 0
+    elif C[curr] < lo_curr and C[prev] >= _line_at(lo_slope, lo_int, prev) * 0.998:
+        direction = "SHORT"
+        breakout_offset = 0
+    # 2-candle kechikish: prev buzilgan, curr hali ham chiziqdan tashqarida
+    elif curr >= 2:
+        prev2 = curr - 2
+        up_prev1 = _line_at(up_slope, up_int, prev)
+        lo_prev1 = _line_at(lo_slope, lo_int, prev)
+        up_prev2 = _line_at(up_slope, up_int, prev2)
+        lo_prev2 = _line_at(lo_slope, lo_int, prev2)
+        if (C[prev] > up_prev1 and C[prev2] <= up_prev2 * 1.002
+                and C[curr] > up_curr):
+            direction = "LONG"
+            breakout_offset = 1
+        elif (C[prev] < lo_prev1 and C[prev2] >= lo_prev2 * 0.998
+              and C[curr] < lo_curr):
+            direction = "SHORT"
+            breakout_offset = 1
 
-            # Drop P1 dan P2 gacha kamida 4% bo'lishi kerak
-            drop_1_2 = (p1_high - p2_low) / p1_high
-            if drop_1_2 < 0.04:
-                continue
+    if not direction:
+        return None
 
-            # PATTERN TOPILDI! TP/SL hisoblash
-            s = _scale(current_close)
-            tp = round(p2_low + 0.618 * (p1_high - p2_low), s)
-            sl = round(min(p4_low, p2_low) * 0.995, s)
-            entry = round(current_close, s)
+    # Trendline ikkalasi ham pivot nuqtalaridan tashqariga chiqmasligi kerak
+    # (yaroqli kanal borligini tekshirish)
+    mid_x = (max(ph1_i, pl1_i) + min(ph2_i, pl2_i)) // 2
+    if _line_at(up_slope, up_int, mid_x) <= _line_at(lo_slope, lo_int, mid_x):
+        return None
 
-            if entry <= sl:
-                continue
-            if tp <= entry:
-                continue
+    # ── TP / SL hisoblash (1:1, height×0.5) ──
+    s     = _scale(float(C[curr]))
+    entry = round(float(C[curr]), s)
+    dist  = round(height * 0.5, s)
 
-            rr = (tp - entry) / (entry - sl) if (entry - sl) > 0 else 0
+    if dist <= 0:
+        return None
 
-            # Confidence: pattern tozaligi + RR
-            base_conf = 68
-            if diff < 0.01:   base_conf += 5   # diplar juda yaqin
-            if drop_1_2 > 0.08: base_conf += 5  # katta tushish
-            if rr >= 1.5:    base_conf += 5
-            if rr >= 2.0:    base_conf += 5
-            confidence = min(88, base_conf)
+    if direction == "LONG":
+        tp = round(entry + dist, s)
+        sl = round(entry - dist, s)
+    else:
+        tp = round(entry - dist, s)
+        sl = round(entry + dist, s)
 
-            return {
-                "symbol": symbol,
-                "timeframe": tf,
-                "pattern": "Trend Buzish (W-Pattern)",
-                "direction": "LONG",
-                "entry": entry,
-                "tp": tp,
-                "sl": sl,
-                "confidence": confidence,
-                "rr": round(rr, 2),
-                # Pattern nuqtalari (chart uchun)
-                "p1_idx": int(p1_idx), "p1_price": float(p1_high),
-                "p2_idx": int(p2_idx), "p2_price": float(p2_low),
-                "p3_idx": int(p3_idx), "p3_price": float(p3_high),
-                "p4_idx": int(p4_idx), "p4_price": float(p4_low),
-                "p5_idx": w - 1,       "p5_price": float(current_close),
-                "neckline": float(p3_high),
-                "midpoint": float(mid_1_2),
-                "fib_618":  float(tp),
-                "window": window,
-            }
+    # Yaroqlilik
+    if direction == "LONG" and (sl >= entry or tp <= entry):
+        return None
+    if direction == "SHORT" and (sl <= entry or tp >= entry):
+        return None
 
-    return None
+    # Ishonch bahosi
+    confidence = 72
+    span_up = ph2_i - ph1_i
+    span_lo = pl2_i - pl1_i
+    if span_up >= 10: confidence += 4
+    if span_lo >= 10: confidence += 4
+    if breakout_offset == 0: confidence += 5   # yangi breakout
+    if abs(up_slope) > 0 and abs(lo_slope) > 0: confidence += 3
+    confidence = min(92, confidence)
 
+    return {
+        "symbol":    symbol,
+        "timeframe": tf,
+        "pattern":   "Trend Chiziq Buzish",
+        "direction": direction,
+        "entry":     entry,
+        "tp":        tp,
+        "sl":        sl,
+        "rr":        1.0,
+        "confidence": confidence,
+        "height":    float(height),
+        # Chart uchun
+        "upper_p1":       (ph1_i, ph1_v),
+        "upper_p2":       (ph2_i, ph2_v),
+        "upper_slope":    up_slope,
+        "upper_intercept": up_int,
+        "lower_p1":       (pl1_i, pl1_v),
+        "lower_p2":       (pl2_i, pl2_v),
+        "lower_slope":    lo_slope,
+        "lower_intercept": lo_int,
+        "breakout_idx":   curr,
+        "up_curr":        float(up_curr),
+        "lo_curr":        float(lo_curr),
+        "window":         window,
+        "breakout_offset": breakout_offset,
+    }
+
+
+# ──────────────────────────────────────────────
+# Top symbollar
+# ──────────────────────────────────────────────
 
 async def _get_top_symbols(client: BitgetClient) -> List[str]:
     try:
@@ -202,13 +243,19 @@ async def _get_top_symbols(client: BitgetClient) -> List[str]:
                 if str(t.get("symbol", "")).endswith("USDT")
                 and safe_float(t.get("usdtVolume", 0)) >= MIN_VOLUME
             ]
-            tickers.sort(key=lambda x: safe_float(x.get("usdtVolume", 0)), reverse=True)
+            tickers.sort(
+                key=lambda x: safe_float(x.get("usdtVolume", 0)), reverse=True
+            )
             return [t["symbol"] for t in tickers[:SCAN_SYMBOLS_LIMIT]]
     except Exception:
         pass
     return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
             "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LTCUSDT", "DOTUSDT"]
 
+
+# ──────────────────────────────────────────────
+# Signal yuborish
+# ──────────────────────────────────────────────
 
 async def send_trend_break_alert(bot, chat_id: int, pat: Dict, raw: list):
     """Trend Buzish signalini Telegramga yuborish."""
@@ -221,34 +268,39 @@ async def send_trend_break_alert(bot, chat_id: int, pat: Dict, raw: list):
     tp        = pat["tp"]
     sl        = pat["sl"]
     conf      = pat["confidence"]
-    rr        = pat["rr"]
-    neckline  = pat["neckline"]
-    fib618    = pat["fib_618"]
+    direction = pat["direction"]
+    height    = pat["height"]
 
-    rr_str = f"1:{rr:.1f}"
+    dir_emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+    dir_arrow = "📈" if direction == "LONG" else "📉"
+
+    entry_pct = abs((tp - entry) / entry * 100)
+    sl_pct    = abs((sl - entry) / entry * 100)
+
     text = (
-        f"🔷 <b>TREND BUZISH SIGNALI!</b>\n"
-        f"{'═'*30}\n"
+        f"🔷 <b>TREND CHIZIQ BUZILDI!</b>\n"
+        f"{'═' * 30}\n"
         f"💎 <b>{symbol}</b> [{tf}]\n"
-        f"🏷 Pattern: <b>W-Pattern (Neckline Yorildi)</b>\n"
-        f"🟢 Yo'nalish: <b>LONG</b>\n"
-        f"📈 Ishonch: <b>{conf}%</b>\n"
-        f"{'─'*30}\n"
-        f"💵 Kirish: <code>{fmt_price(entry)}</code>\n"
-        f"🔵 Neckline: <code>{fmt_price(neckline)}</code>\n"
-        f"🎯 TP (0.618): <code>{fmt_price(tp)}</code>\n"
-        f"🛡 SL: <code>{fmt_price(sl)}</code>\n"
-        f"⚖️ RR: <b>{rr_str}</b>\n"
-        f"{'─'*30}\n"
-        f"📌 1→2 (tushish) → 3 (neckline) →\n"
-        f"   4 (2-dip) → 5 (breakout) 🚀"
+        f"{dir_arrow} Yo'nalish: <b>{dir_emoji}</b>\n"
+        f"📊 Ishonch: <b>{conf}%</b>\n"
+        f"{'─' * 30}\n"
+        f"⚡ Kirish: <code>{fmt_price(entry)}</code>\n"
+        f"🎯 TP: <code>{fmt_price(tp)}</code>  (+{entry_pct:.2f}%)\n"
+        f"🛡 SL: <code>{fmt_price(sl)}</code>  (-{sl_pct:.2f}%)\n"
+        f"⚖️ RR: <b>1:1</b>\n"
+        f"{'─' * 30}\n"
+        f"📏 Kanal balandligi: <code>{fmt_price(height)}</code>\n"
+        f"🔶 TP = Kirish + balandlik×50%\n"
+        f"🔶 SL = Kirish - balandlik×50%"
     )
 
     try:
         chart_bytes = generate_trend_break_chart(raw, pat)
         if chart_bytes:
-            await bot.send_photo(chat_id=chat_id, photo=chart_bytes,
-                                 caption=text, parse_mode="HTML")
+            await bot.send_photo(
+                chat_id=chat_id, photo=chart_bytes,
+                caption=text, parse_mode="HTML"
+            )
             return
     except Exception as e:
         logger.warning(f"Trend break chart xato {symbol}: {e}")
@@ -256,25 +308,28 @@ async def send_trend_break_alert(bot, chat_id: int, pat: Dict, raw: list):
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
 
 
+# ──────────────────────────────────────────────
+# Telegram handler'lar
+# ──────────────────────────────────────────────
+
 async def handle_trend_break_menu(update, context):
     """Reply keyboard 'Trend Buzish' tugmasidan chaqiriladi."""
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    from services import state as gs
-    tb_on = getattr(gs, "trend_break_enabled", False)
+    tb_on  = getattr(gs, "trend_break_enabled", False)
     status = "🟢 YOQILGAN" if tb_on else "🔴 O'CHIRILGAN"
     text = (
-        "🔷 <b>TREND BUZISH — W-Pattern Scanner</b>\n"
+        "🔷 <b>TREND BUZISH — Trendline Breakout Scanner</b>\n"
         "══════════════════════════════════\n\n"
-        "📌 <b>Pattern:</b> W-shakl (Double Bottom)\n"
-        "   ① Baland nuqta (kirish)\n"
-        "   ② Birinchi pastlik (Low 1)\n"
-        "   ③ Neckline (ko'k chiziq)\n"
-        "   ④ Ikkinchi pastlik (Low 2 ≈ Low 1)\n"
-        "   ⑤ Neckline yorilishi → <b>KIRISH!</b>\n\n"
-        "📊 <b>TP:</b> Fibonacci 0.618 (② dan ① gacha)\n"
-        "🛡 <b>SL:</b> ④ dan 0.5% pastda\n\n"
-        f"⚡ <b>Holat:</b> {status}\n\n"
-        "👇 Hozir skanerlamoqchi bo'lsangiz:"
+        "📌 <b>Qanday ishlaydi:</b>\n"
+        "   🔶 2 ta sariq diagonal trend chiziq chiziladi\n"
+        "       • Yuqori (resistance) — oxirgi 2 pivot HIGH\n"
+        "       • Pastki (support) — oxirgi 2 pivot LOW\n\n"
+        "   📈 Narx yuqori chiziqni buzsa → <b>LONG</b>\n"
+        "   📉 Narx pastki chiziqni buzsa → <b>SHORT</b>\n\n"
+        "📐 <b>TP/SL:</b> Kanal balandligi × 50%, RR <b>1:1</b>\n"
+        "⏱️ Vaqt oralig'i: 15m • 1H • 4H\n"
+        "⚡ Faqat 1-2 candle ichidagi yangi buzilishlar\n\n"
+        f"🔘 <b>Holat:</b> {status}\n"
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Hozir Skaner!", callback_data="tb_scan_now")],
@@ -287,21 +342,22 @@ async def handle_trend_break_menu(update, context):
 async def handle_trend_break_inline(update, context):
     """Inline 'f2_trend_break' callback — FYUCHERS 2 menusidan."""
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    from services import state as gs
-    query = update.callback_query
+    query  = update.callback_query
     await query.answer()
-    tb_on = getattr(gs, "trend_break_enabled", False)
+    tb_on  = getattr(gs, "trend_break_enabled", False)
     status = "🟢 YOQILGAN" if tb_on else "🔴 O'CHIRILGAN"
     text = (
-        "🔷 <b>TREND BUZISH — W-Pattern Scanner</b>\n"
+        "🔷 <b>TREND BUZISH — Trendline Breakout Scanner</b>\n"
         "══════════════════════════════════\n\n"
-        "📌 <b>Pattern:</b> W-shakl (Double Bottom)\n"
-        "   ① Baland nuqta → ② Low1 → ③ Neckline\n"
-        "   → ④ Low2 ≈ Low1 → ⑤ Neckline yorildi!\n\n"
-        "📊 <b>TP:</b> Fibonacci 0.618 (② dan ① gacha)\n"
-        "🛡 <b>SL:</b> ④ dan 0.5% pastda\n"
-        "⏱️ Vaqt oralig'i: 15m • 1H • 4H\n\n"
-        f"⚡ <b>Holat:</b> {status}\n"
+        "🔶 2 ta sariq diagonal trend chiziq:\n"
+        "   • Yuqori chiziq: oxirgi 2 pivot HIGH\n"
+        "   • Pastki chiziq: oxirgi 2 pivot LOW\n\n"
+        "📈 Yuqorini buzsa → LONG signal\n"
+        "📉 Pastini buzsa → SHORT signal\n\n"
+        "📐 TP = Kirish ± balandlik×50% | SL = 1:1\n"
+        "⚡ Faqat 1-2 candle yangi buzilishlar\n"
+        "⏱️ 15m • 1H • 4H — 5 daqiqada bir skan\n\n"
+        f"🔘 <b>Holat:</b> {status}\n"
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Hozir Skaner!", callback_data="tb_scan_now")],
@@ -320,16 +376,19 @@ async def handle_trend_break_scan_now(update, context):
     chat_id = query.message.chat_id
     msg = await context.bot.send_message(
         chat_id=chat_id,
-        text="🔷 <b>Trend Buzish skanerlanyapti...</b>\n"
-             "📊 Top 60 USDT-M futures • 15m/1H/4H\n"
-             "<i>30-60 soniya kuting...</i>",
+        text=(
+            "🔷 <b>Trend Buzish skanerlanyapti...</b>\n"
+            "🔶 2 ta sariq trend chiziq topilmoqda\n"
+            "📊 Top 60 USDT-M futures • 15m/1H/4H\n"
+            "<i>30-60 soniya kuting...</i>"
+        ),
         parse_mode="HTML"
     )
 
     try:
-        client = BitgetClient()
+        client  = BitgetClient()
         scanner = TrendBreakScanner(client, bot=context.bot)
-        found = await scanner.scan_once()
+        found   = await scanner.scan_once()
 
         if not found:
             await msg.delete()
@@ -338,12 +397,11 @@ async def handle_trend_break_scan_now(update, context):
                 text=(
                     "🔷 <b>Trend Buzish — Natija</b>\n"
                     "══════════════════════\n"
-                    "📭 Hozircha W-Pattern topilmadi.\n\n"
-                    "<i>Pattern: neckline yorilishi + hali "
-                    "1-nuqta yarmiga yetmagan.</i>"
+                    "📭 Hozircha yangi trendline breakout topilmadi.\n\n"
+                    "<i>Signal faqat 1-2 candle ichida buzilganda keladi.</i>"
                 ),
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔄 Qayta", callback_data="tb_scan_now")
+                    InlineKeyboardButton("🔄 Qayta skaner", callback_data="tb_scan_now")
                 ]]),
                 parse_mode="HTML"
             )
@@ -352,8 +410,7 @@ async def handle_trend_break_scan_now(update, context):
         await msg.delete()
         for pat, raw in found[:5]:
             await send_trend_break_alert(context.bot, chat_id, pat, raw)
-            import asyncio as _asyncio
-            await _asyncio.sleep(1.5)
+            await asyncio.sleep(1.5)
 
     except Exception as e:
         logger.error(f"Trend break scan_now xato: {e}")
@@ -368,35 +425,39 @@ async def handle_trend_break_scan_now(update, context):
         )
 
 
+# ──────────────────────────────────────────────
+# Scanner klassi
+# ──────────────────────────────────────────────
+
 class TrendBreakScanner:
     def __init__(self, client: BitgetClient, bot=None):
         self.client = client
         self.bot    = bot
-        self._seen: set = set()   # Takroriy signallarni oldini olish
+        self._seen: set = set()
 
     async def scan_once(self):
         """Bir marta barcha symbollarni skanerlaydi."""
         symbols = await _get_top_symbols(self.client)
-        found = []
+        found   = []
 
         for symbol in symbols:
             for tf in SCAN_TFS:
                 try:
-                    limit   = TF_CANDLES.get(tf, 120)
-                    resp    = self.client.get_futures_candles(symbol, tf, limit)
+                    limit = TF_CANDLES.get(tf, 100)
+                    resp  = self.client.get_futures_candles(symbol, tf, limit)
                     if resp.get("code") != "00000":
                         await asyncio.sleep(0.05)
                         continue
                     raw = resp.get("data", [])
-                    if not raw or len(raw) < 30:
+                    if not raw or len(raw) < 40:
                         continue
 
-                    pat = detect_w_pattern(raw, symbol, tf)
+                    pat = detect_trendline_breakout(raw, symbol, tf)
                     if not pat:
                         await asyncio.sleep(0.05)
                         continue
 
-                    key = f"{symbol}_{tf}_{pat['p3_price']:.6f}"
+                    key = f"{symbol}_{tf}_{pat['direction']}_{round(pat['entry'], 6)}"
                     if key in self._seen:
                         await asyncio.sleep(0.05)
                         continue
@@ -405,7 +466,7 @@ class TrendBreakScanner:
                     found.append((pat, raw))
                     logger.info(
                         f"🔷 Trend Buzish: {symbol} [{tf}] "
-                        f"conf={pat['confidence']}% RR=1:{pat['rr']}"
+                        f"{pat['direction']} conf={pat['confidence']}% RR=1:1"
                     )
                     await asyncio.sleep(0.15)
 
@@ -414,7 +475,6 @@ class TrendBreakScanner:
 
             await asyncio.sleep(0.1)
 
-        # Seen ro'yxatini tozalash (500 dan oshsa)
         if len(self._seen) > 500:
             self._seen = set(list(self._seen)[-200:])
 
@@ -425,7 +485,7 @@ class TrendBreakScanner:
         logger.info("🔷 Trend Buzish scanner started (W-Pattern, 24/7)")
         gs.scanner.add_log("🔷 Trend Buzish scanner ishga tushdi")
 
-        await asyncio.sleep(35)  # Bot to'liq ishga tushguncha kutish
+        await asyncio.sleep(35)
 
         while True:
             try:
@@ -441,7 +501,7 @@ class TrendBreakScanner:
                             logger.error(f"TrendBreak alert xato: {e}")
                     if found:
                         gs.scanner.add_log(
-                            f"🔷 Trend Buzish: {len(found)} ta signal"
+                            f"🔷 Trend Buzish: {len(found)} ta signal topildi"
                         )
             except Exception as e:
                 logger.error(f"TrendBreak scanner loop xato: {e}")
