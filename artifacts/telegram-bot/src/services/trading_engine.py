@@ -47,98 +47,29 @@ def _price_scale(price: float) -> int:
     return 8
 
 
-def _fix_scale(price: float, msg: str) -> float:
-    """checkScale xabaridan to'g'ri decimal ni topib qaytaradi."""
-    m = re.search(r"checkScale=(\d+)", msg)
-    return round(price, int(m.group(1))) if m else price
-
-
-def _set_tpsl(client, symbol: str, tp: float, sl: float,
-              hold_side: str, sz: float) -> tuple:
-    """
-    TP va SL ni Bitget'ga qo'yish — uch bosqichli:
-      1. profit_loss (TP+SL birga) — bitta API chaqiruvi
-      2. Muvaffaqiyatsiz bo'lsa: pos_profit (TP alohida)
-      3. loss_plan (SL alohida)
-    Returns: (tp_ok: bool, sl_ok: bool)
-    """
-    sz_str  = str(sz)
-    tp_ok = sl_ok = False
-
-    # ── 1-bosqich: TP+SL bitta so'rovda ──────────────────
-    r = client.place_futures_tpsl_both(
-        symbol=symbol,
-        tp_price=str(tp),
-        sl_price=str(sl),
-        side=hold_side,
-        size=sz_str
+def _place_tp_sl_with_retry(client, symbol, plan_type, trig, hold_side, sz):
+    """TP/SL qo'y — checkScale xatosida avtomatik retry."""
+    r = client.place_futures_tp_sl(
+        symbol=symbol, plan_type=plan_type,
+        trigger_price=str(trig), side=hold_side, size=str(sz)
     )
     if r.get("code") == "00000":
-        logger.info(f"✅ TP+SL (profit_loss): {symbol} TP={tp} SL={sl}")
-        return True, True
-
-    combined_msg = r.get("msg", "")
-    logger.info(f"profit_loss bitta so'rov: {combined_msg} — alohida uriniladi")
-
-    # Scale tuzatish
-    if "checkScale" in combined_msg:
-        tp = _fix_scale(tp, combined_msg)
-        sl = _fix_scale(sl, combined_msg)
-        r2 = client.place_futures_tpsl_both(
-            symbol=symbol, tp_price=str(tp), sl_price=str(sl),
-            side=hold_side, size=sz_str
+        return True, trig
+    msg = r.get("msg", "")
+    m = re.search(r"checkScale=(\d+)", msg)
+    if m:
+        correct_scale = int(m.group(1))
+        trig_fixed = round(trig, correct_scale)
+        r2 = client.place_futures_tp_sl(
+            symbol=symbol, plan_type=plan_type,
+            trigger_price=str(trig_fixed), side=hold_side, size=str(sz)
         )
         if r2.get("code") == "00000":
-            logger.info(f"✅ TP+SL (scale fix): {symbol} TP={tp} SL={sl}")
-            return True, True
-
-    # ── 2-bosqich: TP alohida (pos_profit) ───────────────
-    for plan_tp in ("pos_profit", "profit_loss"):
-        r_tp = client.place_futures_tp_sl(
-            symbol=symbol, plan_type=plan_tp,
-            trigger_price=str(tp), side=hold_side, size=sz_str
-        )
-        if r_tp.get("code") == "00000":
-            tp_ok = True
-            logger.info(f"✅ TP ({plan_tp}): {symbol} @ {tp}")
-            break
-        msg_tp = r_tp.get("msg", "")
-        if "checkScale" in msg_tp:
-            tp = _fix_scale(tp, msg_tp)
-            r_tp2 = client.place_futures_tp_sl(
-                symbol=symbol, plan_type=plan_tp,
-                trigger_price=str(tp), side=hold_side, size=sz_str
-            )
-            if r_tp2.get("code") == "00000":
-                tp_ok = True
-                logger.info(f"✅ TP ({plan_tp} scale): {symbol} @ {tp}")
-                break
-        logger.warning(f"⚠️ TP {plan_tp} xato {symbol}: {msg_tp}")
-
-    # ── 3-bosqich: SL alohida (loss_plan) ────────────────
-    for plan_sl in ("loss_plan", "pos_loss"):
-        r_sl = client.place_futures_tp_sl(
-            symbol=symbol, plan_type=plan_sl,
-            trigger_price=str(sl), side=hold_side, size=sz_str
-        )
-        if r_sl.get("code") == "00000":
-            sl_ok = True
-            logger.info(f"✅ SL ({plan_sl}): {symbol} @ {sl}")
-            break
-        msg_sl = r_sl.get("msg", "")
-        if "checkScale" in msg_sl:
-            sl = _fix_scale(sl, msg_sl)
-            r_sl2 = client.place_futures_tp_sl(
-                symbol=symbol, plan_type=plan_sl,
-                trigger_price=str(sl), side=hold_side, size=sz_str
-            )
-            if r_sl2.get("code") == "00000":
-                sl_ok = True
-                logger.info(f"✅ SL ({plan_sl} scale): {symbol} @ {sl}")
-                break
-        logger.warning(f"⚠️ SL {plan_sl} xato {symbol}: {msg_sl}")
-
-    return tp_ok, sl_ok
+            return True, trig_fixed
+        logger.warning(f"⚠️ {symbol} {plan_type} retry xato: {r2.get('msg')}")
+        return False, trig_fixed
+    logger.warning(f"⚠️ {symbol} {plan_type} xato: {msg}")
+    return False, trig
 
 
 class TradingEngine:
@@ -349,24 +280,15 @@ class TradingEngine:
             "open_time_str": __import__("datetime").datetime.utcnow().strftime("%H:%M")
         }
 
-        # Bitget pozitsiyani ro'yxatga olishi uchun 3 soniya kutamiz
-        await asyncio.sleep(3)
-
-        # TP+SL qo'yish — yangi uch bosqichli funksiya
-        tp_ok, sl_ok = False, False
-        for attempt in range(3):
-            if not (tp_ok and sl_ok):
-                try:
-                    tp_ok, sl_ok = _set_tpsl(self.client, symbol, final_tp1, final_sl, hold_side, size)
-                except Exception as e:
-                    logger.error(f"TP/SL error {symbol}: {e}")
-            if tp_ok and sl_ok:
-                break
-            if attempt < 2:
-                await asyncio.sleep(2)
-
-        if not (tp_ok and sl_ok):
-            gs.scanner.add_log(f"⚠️ {symbol} TP/SL to'liq qo'yilmadi (TP:{tp_ok} SL:{sl_ok})")
+        # TP1 = 100% of position, SL = 100%
+        for plan_type, trig, sz in [
+            ("profit_loss", final_tp1, size),
+            ("loss_plan",   final_sl,  size),
+        ]:
+            try:
+                _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+            except Exception as e:
+                logger.error(f"TP/SL error {symbol}: {e}")
 
         if self.bot and gs.notifier_chat_id:
             from utils.formatters import format_auto_trade_notify
@@ -443,16 +365,13 @@ class TradingEngine:
             if final_sl >= entry:
                 final_sl  = round(entry * (1 - atr_r * 1.5), 8)
 
-        # ── Signal TP/SL dan foydalanish (agar analiz to'g'ri hisoblagan bo'lsa) ──
-        sig_tp = signal.get("tp") or signal.get("tp1")
-        sig_sl = signal.get("sl")
-        if sig_tp and sig_sl:
-            if dir_ == "LONG" and sig_tp > entry > sig_sl > 0:
-                final_tp1, final_sl = float(sig_tp), float(sig_sl)
-                logger.info(f"Signal TP/SL ishlatildi: {symbol} TP={final_tp1} SL={final_sl}")
-            elif dir_ == "SHORT" and sig_tp < entry and sig_sl > entry:
-                final_tp1, final_sl = float(sig_tp), float(sig_sl)
-                logger.info(f"Signal TP/SL ishlatildi: {symbol} TP={final_tp1} SL={final_sl}")
+        # ── Zocker TP/SL dan foydalanish (agar mavjud bo'lsa) ──
+        if signal.get("tp1") and signal.get("sl"):
+            ztp = signal["tp1"]; zsl = signal["sl"]
+            if dir_ == "LONG" and ztp > entry > zsl > 0:
+                final_tp1, final_sl = ztp, zsl
+            elif dir_ == "SHORT" and ztp < entry and zsl > entry:
+                final_tp1, final_sl = ztp, zsl
 
         # ── Kontrakt ma'lumotlarini ol ───────────────────────
         import math
@@ -525,22 +444,16 @@ class TradingEngine:
 
         order_id = result.get("data", {}).get("orderId", "")
 
-        # Manual trade TP/SL — Bitget orderini qayta ishlashi uchun 3 soniya kutamiz
+        # TP1 = 100% position, SL = 100%
         if symbol not in SKIP_TP_SL_SYMBOLS:
-            await asyncio.sleep(3)
-            tp_ok, sl_ok = False, False
-            for attempt in range(3):
-                if not (tp_ok and sl_ok):
-                    try:
-                        tp_ok, sl_ok = _set_tpsl(self.client, symbol, final_tp1, final_sl, hold_side, size)
-                    except Exception as e:
-                        logger.error(f"Manual TP/SL error {symbol}: {e}")
-                if tp_ok and sl_ok:
-                    break
-                if attempt < 2:
-                    await asyncio.sleep(2)
-            if not (tp_ok and sl_ok):
-                logger.warning(f"⚠️ {symbol} manual TP/SL to'liq qo'yilmadi (TP:{tp_ok} SL:{sl_ok})")
+            for plan_type, trig, sz in [
+                ("profit_loss", final_tp1, size),
+                ("loss_plan",   final_sl,  size),
+            ]:
+                try:
+                    _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+                except Exception as e:
+                    logger.error(f"Manual TP/SL error {symbol}: {e}")
 
         trade_info = {
             "symbol": symbol, "direction": dir_,
@@ -638,8 +551,16 @@ class TradingEngine:
                         if sl  <= avg_price: sl  = round(avg_price * (1 + atr_r * 1.5), price_scale)
 
                     # TP1 = 100%, SL = 100%
-                    tp_ok, sl_ok = _set_tpsl(self.client, symbol, tp1, sl, hold_side, size)
-                    success = tp_ok and sl_ok
+                    success = True
+                    for plan_type, trig, sz in [
+                        ("profit_loss", tp1, size),
+                        ("loss_plan",   sl,  size),
+                    ]:
+                        ok, _ = _place_tp_sl_with_retry(self.client, symbol, plan_type, trig, hold_side, sz)
+                        if ok:
+                            logger.info(f"✅ {symbol} {plan_type}: {trig}")
+                        else:
+                            success = False
 
                     if success:
                         set_count += 1
