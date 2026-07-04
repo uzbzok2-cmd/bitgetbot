@@ -24,7 +24,6 @@ BOT_FILES = [
     "artifacts/telegram-bot/src/handlers/ai_chat.py",
     "artifacts/telegram-bot/src/handlers/zocker_signal.py",
     "artifacts/telegram-bot/src/handlers/zokpat_scanner.py",
-    "artifacts/telegram-bot/src/handlers/trend_break_scanner.py",
     "artifacts/telegram-bot/src/services/analyzer.py",
     "artifacts/telegram-bot/src/services/bitget_client.py",
     "artifacts/telegram-bot/src/services/chart_generator.py",
