@@ -145,9 +145,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     elif text == "🪙 SPOT":
         await _show_spot_msg(update, context)
-    elif text == "🔷 Trend Buzish":
-        from handlers.trend_break_handlers import show_trend_break_menu_msg
-        await show_trend_break_menu_msg(update, context)
     elif text == "🤖 Bot Holati":
         await _show_bot_status_msg(update, context)
     elif text == "📜 Signal Tarixi":
@@ -167,6 +164,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif text == "📉 Statistika":
         from handlers.statistics import handle_stats_from_text
         await handle_stats_from_text(update, context)
+    elif text == "🔷 Trend Buzish":
+        from handlers.trend_break_scanner import handle_trend_break_menu
+        await handle_trend_break_menu(update, context)
+        return
     elif text == "⚙️ Sozlamalar":
         from handlers.settings import handle_settings_text
         await handle_settings_text(update, context)
