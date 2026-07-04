@@ -1,19 +1,16 @@
 """
-AI Chat — Gemini Vision asosida savdo strategiya tahlili.
-Foydalanuvchi chart/strategiya rasmini yuboradi → Gemini tahlil qiladi
-→ mos keluvchi kripto chartlarini topib yuboradi.
+AI Chat — Gemini'siz, o'zimizning pattern_analyzer asosida.
+Foydalanuvchi matn yoki rasm yuboradi:
+  - Matn: LONG/SHORT + pattern nom → bozorni skan qilib mos chartlarni topadi
+  - Rasm: LONG/SHORT tugmalarini bosadi → skan qiladi
 """
 import asyncio
 import io
-import json
 import logging
 import os
 import re
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
-from google import genai
-from google.genai import types
-from PIL import Image
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from telegram.ext import ContextTypes
 
@@ -28,119 +25,87 @@ from services.analyzer import safe_float
 
 logger = logging.getLogger(__name__)
 
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-
+# ── Konstantlar ────────────────────────────────────────────
 FALLBACK_SYMBOLS = [
     "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
     "DOGEUSDT","ADAUSDT","AVAXUSDT","LTCUSDT","DOTUSDT",
     "LINKUSDT","MATICUSDT","UNIUSDT","ATOMUSDT","NEARUSDT",
     "INJUSDT","ARBUSDT","OPUSDT","AAVEUSDT","SEIUSDT",
 ]
-
 TF_CANDLES = {"15m": 120, "1H": 120, "4H": 100, "1D": 100}
 MIN_VOLUME  = 500_000
 
-ANALYSIS_PROMPT = """Sen tajribali professional kripto savdo analistisan. Bu rasmda savdo strategiyasi, chart patterni yoki savdo seti-up ko'rsatilgan.
-
-Rasmni juda chuqur professional tahlil qilib, FAQAT quyidagi JSON formatida javob ber (boshqa matn qo'shma):
-
-{
-  "patterns": ["Head & Shoulders"],
-  "direction": "SHORT",
-  "timeframes": ["1H", "4H"],
-  "trend": "downtrend",
-  "key_features": ["resistance rejection", "lower highs", "neckline break"],
-  "entry_condition": "neckline yorilgandan keyin SHORT",
-  "signal_type": "reversal",
-  "confidence": 80,
-  "analysis_uz": "Bu rasmda Head & Shoulders patterni ko'rinmoqda. Narx uch bor resistance da to'xtadi. Neckline yorilishi SHORT signalni tasdiqlaydi.",
-  "search_direction": "SHORT",
-  "min_confidence": 68,
-  "scan_timeframes": ["1H", "4H"]
+# Pattern kalit so'zlari (foydalanuvchi matnidan aniqlash uchun)
+PATTERN_KEYWORDS = {
+    "Double Top":           ["double top", "ikki cho'qqi", "2 cho'qqi", "w pattern", "m pattern"],
+    "Double Bottom":        ["double bottom", "ikki dip", "2 dip", "w formation"],
+    "Head & Shoulders":     ["head and shoulders", "head & shoulders", "h&s", "bosh va yelka"],
+    "Inv. Head & Shoulders":["inverse head", "inv head", "inv h&s", "teskari bosh"],
+    "Rising Wedge":         ["rising wedge", "ko'tariluvchi uchburchak", "yuklanuvchi"],
+    "Falling Wedge":        ["falling wedge", "tushuvchi uchburchak", "pastlayuvchi"],
+    "Ascending Triangle":   ["ascending triangle", "ko'tariluvchi triangle"],
+    "Descending Triangle":  ["descending triangle", "tushuvchi triangle"],
+    "Symmetric Triangle":   ["symmetric triangle", "simmetrik triangle", "pennant"],
+    "Triple Top":           ["triple top", "uch cho'qqi", "3 cho'qqi"],
+    "Triple Bottom":        ["triple bottom", "uch dip", "3 dip"],
+    "Breakout":             ["breakout", "yorilish", "break", "yuqoriga chiqish", "pastga tushish"],
 }
 
-Qoidalar:
-- patterns ro'yxati: Double Top, Double Bottom, Triple Top, Triple Bottom, Head & Shoulders, Inv. Head & Shoulders, Rising Wedge, Falling Wedge, Ascending Triangle, Descending Triangle, Symmetric Triangle
-- direction: faqat "LONG" yoki "SHORT"  
-- trend: "uptrend", "downtrend" yoki "sideways"
-- signal_type: "reversal", "continuation" yoki "breakout"
-- scan_timeframes: skanerlanadigan timeframlar ro'yxati ["15m","1H","4H","1D"] dan
-- min_confidence: 65-85 orasida
-- analysis_uz: O'zbek tilida 2-3 gap, JUDA aniq va professional tahlil
-- FAQAT JSON qaytargil"""
+# ── Matn parsing ────────────────────────────────────────────
+def parse_user_text(text: str) -> Dict:
+    """Foydalanuvchi matnidan direction, patterns, timeframlarni ajratib oladi."""
+    t = text.lower().strip()
+
+    # Direction
+    direction = None
+    long_words  = ["long", "buy", "yuqori", "ko'tariladi", "buqa", "bull", "ko'tar", "chiqadi", "growth"]
+    short_words = ["short", "sell", "past", "tushadi", "ayiq", "bear", "tush", "pastga", "fall"]
+    for w in long_words:
+        if w in t:
+            direction = "LONG"
+            break
+    if not direction:
+        for w in short_words:
+            if w in t:
+                direction = "SHORT"
+                break
+
+    # Patterns
+    found_patterns = []
+    for pat_name, keywords in PATTERN_KEYWORDS.items():
+        for kw in keywords:
+            if kw in t:
+                if pat_name not in found_patterns:
+                    found_patterns.append(pat_name)
+                break
+
+    # Timeframlar
+    scan_tfs = []
+    tf_map = {"15m": "15m", "15 m": "15m", "1h": "1H", "4h": "4H", "1d": "1D",
+              "1 soat": "1H", "4 soat": "4H", "kunlik": "1D"}
+    for k, v in tf_map.items():
+        if k in t and v not in scan_tfs:
+            scan_tfs.append(v)
+    if not scan_tfs:
+        scan_tfs = ["1H", "4H"]
+
+    return {
+        "direction": direction,
+        "patterns": found_patterns,
+        "scan_timeframes": scan_tfs,
+        "search_direction": direction,
+        "min_confidence": 65,
+    }
 
 
-def _gemini_client() -> Optional[genai.Client]:
-    if not GEMINI_KEY:
-        return None
-    try:
-        return genai.Client(api_key=GEMINI_KEY)
-    except Exception as e:
-        logger.error(f"Gemini client xato: {e}")
-        return None
-
-
-def _parse_gemini_text(text: str) -> Optional[Dict]:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
-
-
-async def analyze_image_with_gemini(photo_bytes: bytes) -> Optional[Dict]:
-    """Gemini Vision orqali chart/strategiya rasmini tahlil qilish."""
-    client = _gemini_client()
-    if not client:
-        return None
-    try:
-        img = Image.open(io.BytesIO(photo_bytes))
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[ANALYSIS_PROMPT, img],
-            )
-        )
-        data = _parse_gemini_text(response.text)
-        logger.info(f"Gemini tahlil: {data.get('direction')} | {data.get('patterns')} | tf={data.get('scan_timeframes')}")
-        return data
-    except Exception as e:
-        logger.error(f"Gemini analysis xato: {e}")
-        return None
-
-
-async def analyze_text_with_gemini(user_text: str) -> Optional[Dict]:
-    """Matn tavsifi orqali strategiya tahlili."""
-    client = _gemini_client()
-    if not client:
-        return None
-    prompt = (
-        f"Foydalanuvchi bu savdo strategiyasini tasvirlab berdi:\n\n\"{user_text}\"\n\n"
-        + ANALYSIS_PROMPT
-    )
-    try:
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[prompt],
-            )
-        )
-        return _parse_gemini_text(response.text)
-    except Exception as e:
-        logger.error(f"Gemini text analysis xato: {e}")
-        return None
-
-
+# ── Bozor skan ─────────────────────────────────────────────
 async def _get_top_symbols(client: BitgetClient) -> List[str]:
     try:
         d = client.get_futures_tickers()
         if d.get("code") == "00000":
             tickers = [
                 t for t in d.get("data", [])
-                if str(t.get("symbol", "")).endswith("USDT")
+                if str(t.get("symbol","")).endswith("USDT")
                 and safe_float(t.get("usdtVolume", 0)) >= MIN_VOLUME
             ]
             tickers.sort(key=lambda x: safe_float(x.get("usdtVolume", 0)), reverse=True)
@@ -151,22 +116,16 @@ async def _get_top_symbols(client: BitgetClient) -> List[str]:
 
 
 async def scan_matching_charts(
-    gemini_result: Dict,
+    direction: Optional[str],
+    target_patterns: List[str],
+    scan_tfs: List[str],
+    min_conf: int = 65,
     max_results: int = 5
-) -> List[Tuple[str, str, Dict, list]]:
-    """
-    Gemini tahlili asosida mos keluvchi chartlarni topish.
-    Returns: [(symbol, tf, pattern_dict, raw_candles), ...]
-    """
-    direction    = gemini_result.get("search_direction", gemini_result.get("direction", ""))
-    scan_tfs     = gemini_result.get("scan_timeframes", ["1H", "4H"])
-    min_conf     = int(gemini_result.get("min_confidence", 68))
-    target_pats  = [p.lower() for p in gemini_result.get("patterns", [])]
-
-    client   = BitgetClient()
-    symbols  = await _get_top_symbols(client)
-
-    candidates: List[Tuple[float, str, str, Dict, list]] = []
+) -> List[Tuple[str, Dict, list]]:
+    """Mos keluvchi chartlarni topish. Returns: [(tf, pat_dict, raw_candles), ...]"""
+    client  = BitgetClient()
+    symbols = await _get_top_symbols(client)
+    candidates = []
 
     for symbol in symbols:
         for tf in scan_tfs:
@@ -187,17 +146,20 @@ async def scan_matching_charts(
 
                 # Direction filtri
                 if direction and pat["direction"] != direction:
-                    await asyncio.sleep(0.08)
+                    await asyncio.sleep(0.05)
                     continue
 
                 conf = pat["confidence"]
                 if conf < min_conf:
-                    await asyncio.sleep(0.08)
+                    await asyncio.sleep(0.05)
                     continue
 
-                # Pattern mos kelishini tekshirish (bonus score)
+                # Pattern mos kelishini tekshirish
                 pat_name = pat["pattern"].lower()
-                pat_match = any(tp in pat_name or pat_name in tp for tp in target_pats) if target_pats else True
+                pat_match = (
+                    any(tp.lower() in pat_name or pat_name in tp.lower() for tp in target_patterns)
+                    if target_patterns else True
+                )
                 score = conf + (10 if pat_match else 0)
 
                 # Trend break bonus
@@ -211,8 +173,8 @@ async def scan_matching_charts(
             except Exception as e:
                 logger.debug(f"AI scan {symbol} {tf}: {e}")
 
-    # Har symbol uchun faqat eng yaxshi
-    best: Dict[str, Tuple] = {}
+    # Har symbol uchun eng yaxshi
+    best: Dict[str, tuple] = {}
     for score, symbol, tf, pat, raw in candidates:
         prev = best.get(symbol)
         if prev is None or score > prev[0]:
@@ -222,13 +184,10 @@ async def scan_matching_charts(
     return [(tf, pat, raw) for _, tf, pat, raw in ranked[:max_results]]
 
 
-async def send_chart_result(
-    bot, chat_id: int,
-    tf: str, pat: Dict, raw: list,
-    idx: int, total: int
-):
+# ── Chart yuborish ──────────────────────────────────────────
+async def send_chart_result(bot, chat_id: int, tf: str, pat: Dict, raw: list, idx: int, total: int):
     """Bitta mos chart + tahlilni yuborish."""
-    from utils.formatters import fmt_price, _pct_lev
+    from utils.formatters import fmt_price
 
     symbol    = pat["symbol"]
     direction = pat["direction"]
@@ -242,78 +201,62 @@ async def send_chart_result(
     dir_e     = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
     trend_dir = trend.get("direction", "sideways") if trend else "sideways"
     trend_ico = {"uptrend": "📈", "downtrend": "📉", "sideways": "➡️"}.get(trend_dir, "➡️")
+
     broken_txt = ""
-    if trend and trend.get("trend_broken"):
-        broken_txt = f"\n🔺 <b>Trend yorildi!</b> → {trend.get('break_dir','')}"
+    if trend and trend.get("trend_broken") and trend.get("break_dir") == direction:
+        broken_txt = "\n⚡ <b>Trend chizig'i yorildi!</b>"
 
-    sl_dist   = abs(sl - entry)
-    tp_dist   = abs(tp - entry)
-    rr        = round(tp_dist / sl_dist, 2) if sl_dist > 0 else 1.0
-    tp_pct    = tp_dist / entry * 100 if entry > 0 else 0
-    sl_pct    = sl_dist / entry * 100 if entry > 0 else 0
+    rr = round(abs(tp - entry) / abs(entry - sl), 2) if abs(entry - sl) > 0 else 0
 
-    nearest_res = pat.get("nearest_res")
-    nearest_sup = pat.get("nearest_sup")
-
-    text = (
-        f"🤖 <b>AI TOPILDI {idx}/{total}</b>\n{'═'*26}\n"
-        f"💎 <b>{symbol}</b> — {dir_e}\n"
-        f"📐 Pattern: <b>{pattern}</b>\n"
-        f"⏱️ Timeframe: <b>{tf}</b>\n"
-        f"🎯 Ishonch: <b>{conf}%</b>\n"
+    caption = (
+        f"📊 <b>{idx}/{total} — {symbol} [{tf}]</b>\n"
+        f"{'═'*28}\n"
+        f"🏷 Pattern: <b>{pattern}</b>\n"
+        f"🎯 Signal: {dir_e}\n"
         f"{trend_ico} Trend: <b>{trend_dir}</b>{broken_txt}\n"
-        f"{'─'*26}\n"
-        f"💲 Kirish: <code>${fmt_price(entry)}</code>\n"
+        f"📈 Ishonch: <b>{conf}%</b>\n"
+        f"{'─'*28}\n"
+        f"💵 Kirish: <code>{fmt_price(entry)}</code>\n"
+        f"🎯 TP:     <code>{fmt_price(tp)}</code>\n"
+        f"🛡 SL:     <code>{fmt_price(sl)}</code>\n"
+        f"⚖️ RR:     <b>1:{rr}</b>\n"
     )
-    if nearest_res:
-        text += f"🔴 Eng yaqin Resistance: <code>${fmt_price(nearest_res)}</code>\n"
-    if nearest_sup:
-        text += f"🟢 Eng yaqin Support: <code>${fmt_price(nearest_sup)}</code>\n"
-    text += (
-        f"{'─'*26}\n"
-        f"💚 TP: <code>${fmt_price(tp)}</code>  (+{tp_pct:.2f}%)\n"
-        f"🛑 SL: <code>${fmt_price(sl)}</code>  (-{sl_pct:.2f}%)\n"
-        f"⚖️ Risk/Reward: <b>1:{rr}</b>\n"
-    )
-    if rr >= 1.5:
-        text += "✨ <i>Ajoyib R:R nisbat!</i>\n"
-
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💰 Qo'lda Kirish", callback_data=f"manual_trade_{symbol}")
-    ]])
 
     try:
-        buf = generate_pattern_chart(
-            candles_data=raw, symbol=symbol,
-            direction=direction, pattern_name=pattern,
-            entry=entry, tp=tp, sl=sl, confidence=conf,
-            timeframe=tf, pattern_draw=pat.get("draw", {}),
-            supports=pat.get("supports", []),
-            resistances=pat.get("resistances", []),
-            nearest_res=nearest_res,
-            nearest_sup=nearest_sup,
-            trend=trend,
-        )
-        await bot.send_photo(
-            chat_id=chat_id, photo=buf,
-            caption=f"🤖 {symbol} {tf} | {pattern} | {dir_e} | {conf}%",
-        )
+        chart_bytes = generate_pattern_chart(raw, pat)
+        if chart_bytes:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=chart_bytes,
+                caption=caption,
+                parse_mode="HTML"
+            )
+            return
     except Exception as e:
-        logger.warning(f"AI chart xato {symbol}: {e}")
+        logger.warning(f"Chart yaratishda xato {symbol}: {e}")
 
-    try:
-        await bot.send_message(chat_id=chat_id, text=text,
-                               parse_mode="HTML", reply_markup=kb)
-    except Exception as e:
-        logger.error(f"AI send xato: {e}")
+    await bot.send_message(chat_id=chat_id, text=caption, parse_mode="HTML")
 
 
+# ── Klaviaturalar ───────────────────────────────────────────
 def ai_chat_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("❌ AI Chatdan Chiqish", callback_data="ai_chat_exit")],
     ])
 
 
+def direction_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🟢 LONG (Yuqori)", callback_data="ai_dir_LONG"),
+            InlineKeyboardButton("🔴 SHORT (Pastga)", callback_data="ai_dir_SHORT"),
+        ],
+        [InlineKeyboardButton("🔍 Har Ikkalasi", callback_data="ai_dir_BOTH")],
+        [InlineKeyboardButton("❌ Bekor", callback_data="ai_chat_exit")],
+    ])
+
+
+# ── Handlertlar ─────────────────────────────────────────────
 async def handle_ai_chat_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """'🤖 AI Chat' tugmasi bosilganda."""
     user_id = update.effective_user.id
@@ -321,128 +264,193 @@ async def handle_ai_chat_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     gs.ai_chat_users.add(user_id)
 
-    if not GEMINI_KEY:
-        await update.message.reply_text(
-            "❌ <b>GEMINI_API_KEY</b> topilmadi.\n"
-            "Replit Secrets ichiga <code>GEMINI_API_KEY</code> qo'shing.",
-            parse_mode="HTML"
-        )
-        return
-
     text = (
-        "🤖 <b>AI CHAT — STRATEGIYA TAHLILI</b>\n"
+        "🤖 <b>AI BOZOR SKANERI</b>\n"
         "══════════════════════════════\n\n"
-        "📸 <b>Qanday ishlaydi:</b>\n"
-        "1️⃣ Savdo strategiyasi yoki chart rasmini yuboring\n"
-        "2️⃣ AI rasmni tahlil qiladi (pattern, direction, trend)\n"
-        "3️⃣ Barcha kripto bozorlarini skanerlab mos chartlarni topadi\n"
-        "4️⃣ Trend chiziqlari va breakout tahminlari bilan chartlarni yuboradi\n\n"
-        "💡 <b>Yoki matn bilan ham:</b>\n"
-        "<i>\"Head & Shoulders SHORT signal, 4H da neckline yorilishi\"</i>\n\n"
+        "📝 <b>Strategiyangizni yozing:</b>\n"
+        "<i>Misol: \"Head & Shoulders SHORT signal, 4H da\"</i>\n"
+        "<i>Misol: \"LONG breakout triangle 1H\"</i>\n"
+        "<i>Misol: \"Double bottom LONG\"</i>\n\n"
+        "📸 <b>Yoki chart rasmini yuboring</b> →\n"
+        "LONG/SHORT yo'nalishni tanlaysiz → AI skan qiladi\n\n"
+        "🔍 <b>Nima qiladi:</b>\n"
+        "Barcha USDT futures (top 60) ni skanerlab\n"
+        "sizning strategiyangizga mos chartlarni topadi!\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📤 <b>Hozir rasm yoki matn yuboring!</b>\n"
-        "🔴 Chiqish uchun: <code>chiq</code>"
+        "📤 <b>Hozir yozing yoki rasm yuboring!</b>\n"
+        "🔴 Chiqish: <code>chiq</code>"
     )
-    await update.message.reply_text(
-        text, parse_mode="HTML", reply_markup=ai_chat_keyboard()
-    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=ai_chat_keyboard())
 
 
 async def handle_ai_chat_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Foydalanuvchi rasm yubordi — AI tahlili."""
+    """Foydalanuvchi chart rasm yubordi — LONG/SHORT tanlash."""
     user_id = update.effective_user.id
     if user_id not in gs.ai_chat_users:
         return
     if user_id not in gs.authenticated_users:
         return
 
-    msg: Message = update.message
-    thinking = await msg.reply_text(
-        "🧠 <b>Gemini AI rasmni tahlil qilmoqda...</b>\n"
-        "<i>Strategiyani o'qiyapman...</i>",
-        parse_mode="HTML"
-    )
-
+    # Rasmni yuklab olamiz (lekin tahlil qilmaymiz — faqat saqlaymiz)
     try:
-        photo  = msg.photo[-1]
+        photo   = update.message.photo[-1]
         tg_file = await context.bot.get_file(photo.file_id)
-        buf    = io.BytesIO()
+        buf     = io.BytesIO()
         await tg_file.download_to_memory(buf)
-        photo_bytes = buf.getvalue()
-    except Exception as e:
-        await thinking.edit_text(f"❌ Rasm yuklab bo'lmadi: {e}")
-        return
+        # context.user_data ga saqlaymiz (keyingi bosqichda ishlatiladi)
+        context.user_data["ai_photo"] = True
+    except Exception:
+        pass
 
-    gemini_result = await analyze_image_with_gemini(photo_bytes)
-
-    if not gemini_result:
-        await thinking.edit_text(
-            "❌ <b>Gemini tahlil qilolmadi.</b>\n"
-            "Iltimos, aniqroq chart rasm yuboring.",
-            parse_mode="HTML"
-        )
-        return
-
-    direction  = gemini_result.get("direction", "?")
-    patterns   = ", ".join(gemini_result.get("patterns", ["Noma'lum"]))
-    analysis   = gemini_result.get("analysis_uz", "")
-    trend      = gemini_result.get("trend", "sideways")
-    tfs        = ", ".join(gemini_result.get("scan_timeframes", ["1H", "4H"]))
-    conf_gemini = gemini_result.get("confidence", 0)
-    signal_type = gemini_result.get("signal_type", "reversal")
-    entry_cond  = gemini_result.get("entry_condition", "")
-
-    dir_e = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
-    trend_icons = {"uptrend": "📈", "downtrend": "📉", "sideways": "➡️"}
-    trend_ico = trend_icons.get(trend, "➡️")
-
-    summary = (
-        f"🤖 <b>GEMINI AI TAHLILI</b>\n{'═'*26}\n"
-        f"📐 Pattern: <b>{patterns}</b>\n"
-        f"🎯 Yo'nalish: {dir_e}\n"
-        f"{trend_ico} Trend: <b>{trend}</b>\n"
-        f"📊 Signal turi: <b>{signal_type}</b>\n"
-        f"⏱️ Timeframlar: <b>{tfs}</b>\n"
-        f"🎲 AI ishonch: <b>{conf_gemini}%</b>\n"
+    await update.message.reply_text(
+        "📸 <b>Rasm qabul qilindi!</b>\n\n"
+        "🎯 Qaysi yo'nalishda skanerlaylik?\n"
+        "<i>(Rasmingizda ko'rgan signal yo'nalishini tanlang)</i>",
+        parse_mode="HTML",
+        reply_markup=direction_keyboard()
     )
-    if entry_cond:
-        summary += f"🔑 Kirish sharti: <i>{entry_cond}</i>\n"
-    if analysis:
-        summary += f"{'─'*26}\n💬 <i>{analysis}</i>\n"
-    summary += f"{'─'*26}\n🔍 <b>Mos kripto chartlar izlanmoqda...</b>"
 
-    await thinking.edit_text(summary, parse_mode="HTML")
 
-    scan_msg = await msg.reply_text(
-        f"⏳ <b>Skanerlanmoqda...</b>\n"
-        f"Barcha USDT futures da {direction} signali qidirilmoqda...",
+async def handle_ai_chat_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Matnli xabar AI chat modeda."""
+    user_id = update.effective_user.id
+    if user_id not in gs.ai_chat_users:
+        return False
+
+    text = (update.message.text or "").strip()
+    t_low = text.lower()
+
+    # Chiqish
+    if t_low in ("chiq", "exit", "bekor", "cancel", "❌", "/start"):
+        gs.ai_chat_users.discard(user_id)
+        await update.message.reply_text("✅ AI Chat'dan chiqdingiz.\nBosh menyuga qaytdingiz.")
+        from handlers.main_menu import bottom_reply_keyboard
+        await update.message.reply_text(
+            "🏠 <b>Bosh menyu</b>", parse_mode="HTML",
+            reply_markup=bottom_reply_keyboard()
+        )
+        return True
+
+    # Matnni tahlil qil
+    parsed = parse_user_text(text)
+    direction = parsed["direction"]
+    patterns  = parsed["patterns"]
+    scan_tfs  = parsed["scan_timeframes"]
+
+    if not direction:
+        # Direction aniqlanmadi — tanlashini so'rab ask
+        context.user_data["ai_text_query"] = text
+        await update.message.reply_text(
+            f"🤔 <b>Yo'nalish aniqlanmadi</b>\n\n"
+            f"Strategiyangiz: <i>«{text[:80]}»</i>\n\n"
+            f"Qaysi yo'nalishda skanerlaylik?",
+            parse_mode="HTML",
+            reply_markup=direction_keyboard()
+        )
+        return True
+
+    dir_emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+    pat_str   = ", ".join(patterns) if patterns else "Barcha patternlar"
+    tf_str    = ", ".join(scan_tfs)
+
+    thinking = await update.message.reply_text(
+        f"🔍 <b>Skanerlanmoqda...</b>\n\n"
+        f"📊 Yo'nalish: {dir_emoji}\n"
+        f"🏷 Pattern: <b>{pat_str}</b>\n"
+        f"⏱️ Timeframe: <b>{tf_str}</b>\n\n"
+        f"<i>Top 60 USDT futures tekshirilmoqda...</i>",
         parse_mode="HTML"
     )
 
+    await _do_scan_and_send(update.message, context, thinking, direction, patterns, scan_tfs)
+    return True
+
+
+async def handle_ai_direction_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """LONG/SHORT/BOTH tugmasi bosilganda — skan boshlaydi."""
+    query   = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if user_id not in gs.authenticated_users:
+        return
+
+    data = query.data  # ai_dir_LONG / ai_dir_SHORT / ai_dir_BOTH
+
+    if data == "ai_dir_BOTH":
+        direction = None
+        dir_label = "🔍 Har Ikkalasi"
+    elif data == "ai_dir_LONG":
+        direction = "LONG"
+        dir_label = "🟢 LONG"
+    else:
+        direction = "SHORT"
+        dir_label = "🔴 SHORT"
+
+    # Matn query saqlanganmi?
+    text_query = context.user_data.pop("ai_text_query", "")
+    parsed_patterns = []
+    scan_tfs = ["1H", "4H"]
+    if text_query:
+        p = parse_user_text(text_query)
+        parsed_patterns = p["patterns"]
+        scan_tfs = p["scan_timeframes"]
+
+    pat_str = ", ".join(parsed_patterns) if parsed_patterns else "Barcha patternlar"
+
+    await query.edit_message_text(
+        f"🔍 <b>Skanerlanmoqda...</b>\n\n"
+        f"📊 Yo'nalish: {dir_label}\n"
+        f"🏷 Pattern: <b>{pat_str}</b>\n"
+        f"⏱️ Timeframe: <b>{', '.join(scan_tfs)}</b>\n\n"
+        f"<i>Top 60 USDT futures tekshirilmoqda...</i>",
+        parse_mode="HTML"
+    )
+
+    await _do_scan_and_send(query.message, context, query.message, direction, parsed_patterns, scan_tfs)
+
+
+async def _do_scan_and_send(
+    original_msg, context, thinking_msg,
+    direction: Optional[str],
+    patterns: List[str],
+    scan_tfs: List[str],
+):
+    """Skan qilib natijalarni yuboradi."""
     try:
-        matches = await scan_matching_charts(gemini_result, max_results=5)
+        matches = await scan_matching_charts(
+            direction=direction,
+            target_patterns=patterns,
+            scan_tfs=scan_tfs,
+            min_conf=65,
+            max_results=5
+        )
     except Exception as e:
         logger.error(f"AI scan xato: {e}")
-        await scan_msg.edit_text(f"❌ Skan xatosi: {e}")
+        await thinking_msg.edit_text(f"❌ Skan xatosi: {e}")
         return
 
     if not matches:
-        await scan_msg.edit_text(
-            f"🔍 <b>Mos chart topilmadi</b>\n"
-            f"Hozirda {direction} yo'nalishda <b>{patterns}</b> patterniga "
+        dir_txt = direction or "har ikkalasi"
+        pat_txt = ", ".join(patterns) if patterns else "barcha"
+        await thinking_msg.edit_text(
+            f"🔍 <b>Mos chart topilmadi</b>\n\n"
+            f"<b>{dir_txt}</b> yo'nalishda <b>{pat_txt}</b> patterniga\n"
             f"mos kripto topilmadi.\n\n"
-            f"5 daqiqadan keyin qayta sinab ko'ring.",
-            parse_mode="HTML"
+            f"💡 <i>5 daqiqadan keyin qayta sinab ko'ring\n"
+            f"yoki boshqa pattern/timeframe kiriting.</i>",
+            parse_mode="HTML",
+            reply_markup=ai_chat_keyboard()
         )
         return
 
-    await scan_msg.edit_text(
+    await thinking_msg.edit_text(
         f"✅ <b>{len(matches)} ta mos chart topildi!</b>\n"
-        f"Chartlar tayorlanmoqda...",
+        f"Chartlar tayyorlanmoqda...",
         parse_mode="HTML"
     )
 
-    chat_id = msg.chat_id
+    chat_id = original_msg.chat_id
     for i, (tf, pat, raw) in enumerate(matches, 1):
         await send_chart_result(context.bot, chat_id, tf, pat, raw, i, len(matches))
         await asyncio.sleep(1.0)
@@ -450,102 +458,11 @@ async def handle_ai_chat_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            f"✅ <b>AI tahlil yakunlandi!</b>\n"
+            f"✅ <b>Skan yakunlandi!</b>\n"
             f"📊 {len(matches)} ta mos chart yuborildi.\n\n"
-            f"📸 Yangi strategiya rasmini yuboring\n"
-            f"yoki <code>chiq</code> deb yozing."
+            f"📝 Yangi strategiya yozing yoki rasm yuboring\n"
+            f"🔴 Chiqish: <code>chiq</code>"
         ),
         parse_mode="HTML",
         reply_markup=ai_chat_keyboard()
-    )
-
-
-async def handle_ai_chat_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Matnli xabar AI chat modeda — strategiya tavsifi yoki 'chiq'.
-    Returns True if handled (user was in AI chat mode).
-    """
-    user_id = update.effective_user.id
-    if user_id not in gs.ai_chat_users:
-        return False
-
-    text = (update.message.text or "").strip().lower()
-
-    if text in ("chiq", "exit", "bekor", "cancel", "❌", "/start"):
-        gs.ai_chat_users.discard(user_id)
-        await update.message.reply_text(
-            "✅ AI Chat'dan chiqdingiz.\nBosh menyuga qaytdingiz.",
-            parse_mode="HTML"
-        )
-        from handlers.main_menu import bottom_reply_keyboard
-        await update.message.reply_text(
-            "🏠 <b>Bosh menyu</b>",
-            parse_mode="HTML",
-            reply_markup=bottom_reply_keyboard()
-        )
-        return True
-
-    # Matn orqali strategiya tavsifi
-    thinking = await update.message.reply_text(
-        "🧠 <b>AI strategiyangizni tahlil qilmoqda...</b>",
-        parse_mode="HTML"
-    )
-
-    gemini_result = await analyze_text_with_gemini(update.message.text)
-    if not gemini_result:
-        await thinking.edit_text(
-            "❌ Tahlil qilolmadim. Iltimos, strategiyani aniqroq tasvirlab yuboring\n"
-            "yoki chart rasmini yuboring.",
-            parse_mode="HTML"
-        )
-        return True
-
-    direction = gemini_result.get("direction", "?")
-    patterns  = ", ".join(gemini_result.get("patterns", []))
-    analysis  = gemini_result.get("analysis_uz", "")
-    dir_e     = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
-
-    await thinking.edit_text(
-        f"🤖 <b>AI Tahlil:</b>\n"
-        f"📐 Pattern: <b>{patterns}</b>\n"
-        f"🎯 Yo'nalish: {dir_e}\n"
-        f"{'─'*20}\n{analysis}\n\n"
-        f"🔍 Mos chartlar izlanmoqda...",
-        parse_mode="HTML"
-    )
-
-    try:
-        matches = await scan_matching_charts(gemini_result, max_results=5)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Skan xatosi: {e}")
-        return True
-
-    if not matches:
-        await update.message.reply_text(
-            f"🔍 {direction} yo'nalishda mos chart topilmadi.",
-            parse_mode="HTML"
-        )
-        return True
-
-    chat_id = update.message.chat_id
-    await update.message.reply_text(
-        f"✅ {len(matches)} ta mos chart topildi!", parse_mode="HTML"
-    )
-    for i, (tf, pat, raw) in enumerate(matches, 1):
-        await send_chart_result(context.bot, chat_id, tf, pat, raw, i, len(matches))
-        await asyncio.sleep(1.0)
-
-    return True
-
-
-async def handle_ai_chat_exit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline 'Chiqish' tugmasi."""
-    query = update.callback_query
-    user_id = query.from_user.id
-    gs.ai_chat_users.discard(user_id)
-    await query.answer("✅ AI Chat'dan chiqdingiz!")
-    await query.edit_message_text(
-        "✅ <b>AI Chat'dan chiqdingiz.</b>\n"
-        "Bosh menyudan davom eting.",
-        parse_mode="HTML"
     )
