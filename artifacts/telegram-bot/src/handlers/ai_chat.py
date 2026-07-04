@@ -223,23 +223,7 @@ async def send_chart_result(bot, chat_id: int, tf: str, pat: Dict, raw: list, id
     )
 
     try:
-        chart_bytes = generate_pattern_chart(
-            candles_data=raw,
-            symbol=symbol,
-            direction=direction,
-            pattern_name=pattern,
-            entry=entry,
-            tp=tp,
-            sl=sl,
-            confidence=conf,
-            timeframe=tf,
-            pattern_draw=pat.get("pattern_draw"),
-            supports=pat.get("supports"),
-            resistances=pat.get("resistances"),
-            nearest_res=pat.get("nearest_res"),
-            nearest_sup=pat.get("nearest_sup"),
-            trend=pat.get("trend"),
-        )
+        chart_bytes = generate_pattern_chart(raw, pat)
         if chart_bytes:
             await bot.send_photo(
                 chat_id=chat_id,
