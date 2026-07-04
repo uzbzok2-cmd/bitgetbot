@@ -75,22 +75,6 @@ async def run_github_sync():
     await run_periodic_sync()
 
 
-async def run_trend_break_scanner(bot):
-    """Background: Trend Buzish — W-Break va Trendline-Break (faqat yangi breakout)."""
-    await asyncio.sleep(35)  # Trading engine + Zocker + ZOKPAT ishga tushguncha kutamiz
-    try:
-        from handlers.trend_break_scanner import TrendBreakScanner
-        client = BitgetClient()
-        scanner = TrendBreakScanner(client, bot=bot)
-        import builtins
-        builtins._trend_break_scanner = scanner
-        logger.info("🔷 Trend Buzish scanner started")
-        gs.scanner.add_log("🔷 Trend Buzish scanner ishga tushdi")
-        await scanner.run()
-    except Exception as e:
-        logger.error(f"Trend Buzish scanner error: {e}")
-
-
 async def run_zokpat_scanner(bot):
     """Background: ZOKPAT pattern signal — chart patterns."""
     await asyncio.sleep(25)  # Trading engine + Zocker ishga tushguncha kutamiz
@@ -105,6 +89,22 @@ async def run_zokpat_scanner(bot):
         await scanner.run()
     except Exception as e:
         logger.error(f"ZOKPAT scanner error: {e}")
+
+
+async def run_trend_break_scanner(bot):
+    """Background: Trend Buzish — W-Pattern scanner."""
+    await asyncio.sleep(35)
+    try:
+        from handlers.trend_break_scanner import TrendBreakScanner
+        client = BitgetClient()
+        scanner = TrendBreakScanner(client, bot=bot)
+        import builtins
+        builtins._trend_break_scanner = scanner
+        logger.info("🔷 Trend Buzish scanner started")
+        gs.scanner.add_log("🔷 Trend Buzish scanner ishga tushdi")
+        await scanner.run()
+    except Exception as e:
+        logger.error(f"Trend Buzish scanner error: {e}")
 
 
 async def post_init(application):
