@@ -91,12 +91,29 @@ async def run_zokpat_scanner(bot):
         logger.error(f"ZOKPAT scanner error: {e}")
 
 
+async def run_trend_break_scanner(bot):
+    """Background: Trend Buzish — W-Pattern scanner."""
+    await asyncio.sleep(35)
+    try:
+        from handlers.trend_break_scanner import TrendBreakScanner
+        client = BitgetClient()
+        scanner = TrendBreakScanner(client, bot=bot)
+        import builtins
+        builtins._trend_break_scanner = scanner
+        logger.info("🔷 Trend Buzish scanner started")
+        gs.scanner.add_log("🔷 Trend Buzish scanner ishga tushdi")
+        await scanner.run()
+    except Exception as e:
+        logger.error(f"Trend Buzish scanner error: {e}")
+
+
 async def post_init(application):
     """Launch background tasks after bot starts."""
     loop = asyncio.get_event_loop()
     loop.create_task(run_trading_background(application.bot))
     loop.create_task(run_zocker_scanner(application.bot))
     loop.create_task(run_zokpat_scanner(application.bot))
+    loop.create_task(run_trend_break_scanner(application.bot))
     loop.create_task(run_github_sync())
     loop.create_task(_set_tp_sl_on_startup(application.bot))
 
