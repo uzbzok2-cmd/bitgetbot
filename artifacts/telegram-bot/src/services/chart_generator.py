@@ -726,7 +726,13 @@ def generate_pattern_chart(
 
 
 def generate_trend_break_chart(candles_data: list, pat: dict) -> io.BytesIO:
-    """W-Pattern (Trend Buzish) chart — 5 nuqta, neckline, TP, SL."""
+    """
+    Trend Chiziq Buzish chart:
+      - Ikki sariq diagonal trend chiziq (yuqori + pastki)
+      - Oq yulduz breakout nuqtasida
+      - Entry (sariq), TP (yashil), SL (qizil) gorizontal chiziqlar
+      - TP/SL zonalari shading
+    """
     timestamps, opens, highs, lows, closes, vols = _make_candles(candles_data)
     if not closes:
         return _empty_chart(pat.get("symbol", "?"))
@@ -737,117 +743,138 @@ def generate_trend_break_chart(candles_data: list, pat: dict) -> io.BytesIO:
     tp        = pat["tp"]
     sl        = pat["sl"]
     conf      = pat["confidence"]
-    neckline  = pat["neckline"]
-    window    = pat.get("window", 80)
+    direction = pat["direction"]
+    window    = pat.get("window", 100)
 
-    p1_idx = pat["p1_idx"]
-    p2_idx = pat["p2_idx"]
-    p3_idx = pat["p3_idx"]
-    p4_idx = pat["p4_idx"]
-    p5_idx = pat["p5_idx"]
+    # Trend chiziq parametrlari
+    up_slope = pat["upper_slope"]
+    up_int   = pat["upper_intercept"]
+    lo_slope = pat["lower_slope"]
+    lo_int   = pat["lower_intercept"]
+    ph1_i, ph1_v = pat["upper_p1"]
+    ph2_i, ph2_v = pat["upper_p2"]
+    pl1_i, pl1_v = pat["lower_p1"]
+    pl2_i, pl2_v = pat["lower_p2"]
+    brk_idx  = pat["breakout_idx"]
 
-    BG       = "#0d1117"; GRID   = "#1f2937"
-    UP_BODY  = "#26a69a"; DN_BODY = "#ef5350"
-    WICK     = "#6b7280"; TEXT_C  = "#e5e7eb"
-    ENTRY_C  = "#f59e0b"; TP_C    = "#22c55e"
-    SL_C     = "#ef4444"; NECK_C  = "#60a5fa"
-    PAT_C    = "#a78bfa"
+    # Ranglar
+    BG      = "#0d1117";  GRID    = "#1f2937"
+    UP_BODY = "#26a69a";  DN_BODY = "#ef5350"
+    WICK    = "#6b7280";  TEXT_C  = "#e5e7eb"
+    ENTRY_C = "#f59e0b";  TP_C    = "#22c55e"
+    SL_C    = "#ef4444";  TREND_C = "#f59e0b"  # sariq trend chiziq
+    BRK_C   = "#ffffff"                         # oq breakout belgi
 
     # Windowed candles
-    n = min(window, len(closes))
-    op_n = opens[-n:]; hi_n = highs[-n:]
-    lo_n = lows[-n:]; cl_n = closes[-n:]
+    n    = min(window, len(closes))
+    op_n = opens[-n:];  hi_n = highs[-n:]
+    lo_n = lows[-n:];   cl_n = closes[-n:]
 
     fig, ax = plt.subplots(figsize=(12, 6.5), facecolor=BG)
     ax.set_facecolor(BG)
-    ax.grid(True, color=GRID, linewidth=0.4, alpha=0.7)
+    ax.grid(True, color=GRID, linewidth=0.4, alpha=0.6)
     ax.tick_params(colors=TEXT_C, labelsize=7)
     for spine in ax.spines.values():
         spine.set_edgecolor(GRID)
 
-    # Candlestick
+    # ── Candlestick ──
     w_bar = 0.6
     for i, (o, h, l, c) in enumerate(zip(op_n, hi_n, lo_n, cl_n)):
         color   = UP_BODY if c >= o else DN_BODY
-        body_lo = min(o, c); body_hi = max(o, c)
+        body_lo = min(o, c);  body_hi = max(o, c)
         ax.bar(i, max(body_hi - body_lo, 1e-10), width=w_bar,
                bottom=body_lo, color=color, linewidth=0)
-        ax.plot([i, i], [l, body_lo],  color=WICK, linewidth=0.8)
-        ax.plot([i, i], [body_hi, h],  color=WICK, linewidth=0.8)
+        ax.plot([i, i], [l, body_lo],  color=WICK, linewidth=0.7)
+        ax.plot([i, i], [body_hi, h],  color=WICK, linewidth=0.7)
 
-    x_right = n + 3
+    x_right  = n - 1
+    x_extend = n + 4  # trendline o'ng tomonga cho'ziladi
 
-    # Neckline (ko'k gorizontal chiziq — P3 sathida)
-    ax.axhline(neckline, color=NECK_C, linewidth=1.5, linestyle="--", alpha=0.9,
-               label=f"Neckline  ${_fmt(neckline)}")
+    # ── Sariq trend chiziqlar ──
+    # Yuqori (resistance) trendline
+    x_up_start = max(0, ph1_i)
+    up_xs = [x_up_start, x_extend]
+    up_ys = [up_slope * x_up_start + up_int,
+              up_slope * x_extend  + up_int]
+    ax.plot(up_xs, up_ys, color=TREND_C, linewidth=2.0,
+            linestyle="--", alpha=0.92, zorder=5, label="Yuqori trend")
 
-    # TP va SL chiziqlar
-    ax.axhline(tp, color=TP_C, linewidth=1.4, linestyle="--", alpha=0.85)
-    ax.axhline(sl, color=SL_C, linewidth=1.4, linestyle="--", alpha=0.85)
+    # Pastki (support) trendline
+    x_lo_start = max(0, pl1_i)
+    lo_xs = [x_lo_start, x_extend]
+    lo_ys = [lo_slope * x_lo_start + lo_int,
+              lo_slope * x_extend  + lo_int]
+    ax.plot(lo_xs, lo_ys, color=TREND_C, linewidth=2.0,
+            linestyle="--", alpha=0.92, zorder=5, label="Pastki trend")
 
-    # Label'lar o'ng tomonga
-    ax.text(x_right, tp, f"🎯 TP (0.618)\n${_fmt(tp)}", color=TP_C,
-            fontsize=7.5, va="center", fontweight="bold")
-    ax.text(x_right, sl, f"🛡 SL\n${_fmt(sl)}", color=SL_C,
-            fontsize=7.5, va="center", fontweight="bold")
-    ax.text(x_right, entry, f"⚡ Entry\n${_fmt(entry)}", color=ENTRY_C,
-            fontsize=7.5, va="center", fontweight="bold")
-    ax.text(x_right, neckline, f"🔵 Neck\n${_fmt(neckline)}", color=NECK_C,
-            fontsize=7, va="center")
+    # Pivot nuqtalar (sariq doirachalar trend chiziqlarda)
+    ax.scatter([ph1_i, ph2_i], [ph1_v, ph2_v],
+               s=45, color=TREND_C, zorder=7, alpha=0.85)
+    ax.scatter([pl1_i, pl2_i], [pl1_v, pl2_v],
+               s=45, color=TREND_C, zorder=7, alpha=0.85)
 
-    # 5 ta pattern nuqtasini belgilash
-    point_x  = [p1_idx, p2_idx, p3_idx, p4_idx, p5_idx]
-    point_y  = [pat["p1_price"], pat["p2_price"],
-                pat["p3_price"], pat["p4_price"], pat["p5_price"]]
-    offsets  = [  # label offset (up/down)
-        (pat["p1_price"], "top",    "#ffffff"),
-        (pat["p2_price"], "bottom", "#ffffff"),
-        (pat["p3_price"], "top",    "#ffffff"),
-        (pat["p4_price"], "bottom", "#ffffff"),
-        (pat["p5_price"], "top",    "#22c55e"),
-    ]
-    labels   = ["①", "②", "③", "④", "⑤"]
+    # Kanal ichini sariq rangi bilan to'lash (juda shaffof)
+    x_fill = np.linspace(max(x_up_start, x_lo_start), x_right, 80)
+    y_up   = up_slope * x_fill + up_int
+    y_lo   = lo_slope * x_fill + lo_int
+    ax.fill_between(x_fill, y_lo, y_up,
+                    color=TREND_C, alpha=0.04, zorder=2)
 
-    for i, (xi, yi, lbl, (yy, va, clr)) in enumerate(
-            zip(point_x, point_y, labels, offsets)):
-        ax.scatter(xi, yi, s=55, color=PAT_C, zorder=6)
-        ax.text(xi, yy, lbl, color=clr, fontsize=9, ha="center",
-                va=va, fontweight="bold",
-                bbox=dict(facecolor=BG, alpha=0.7, edgecolor="none", pad=1.5))
+    # ── Breakout nuqtasi (oq yulduz) ──
+    brk_price = cl_n[-1] if brk_idx >= n - 1 else cl_n[brk_idx]
+    ax.scatter([x_right], [brk_price],
+               s=200, color=BRK_C, marker="*", zorder=10,
+               label="Breakout kirishi")
 
-    # W-pattern chiziq (1→2→3→4→5)
-    xs = point_x
-    ys = [pat["p1_price"], pat["p2_price"],
-          pat["p3_price"], pat["p4_price"], pat["p5_price"]]
-    ax.plot(xs, ys, color=PAT_C, linewidth=1.3, alpha=0.6, linestyle="-")
+    # ── Entry, TP, SL gorizontal chiziqlar ──
+    ax.axhline(entry, color=ENTRY_C, linewidth=1.6, linestyle="-",  alpha=0.9)
+    ax.axhline(tp,    color=TP_C,    linewidth=1.4, linestyle="--", alpha=0.85)
+    ax.axhline(sl,    color=SL_C,    linewidth=1.4, linestyle="--", alpha=0.85)
 
-    # TP zonasi (yashil shading)
-    ax.axhspan(entry, tp, alpha=0.06, color=TP_C)
-    ax.axhspan(sl, entry, alpha=0.06, color=SL_C)
+    # Shading zonalar
+    if direction == "LONG":
+        ax.axhspan(entry, tp, alpha=0.07, color=TP_C)
+        ax.axhspan(sl,  entry, alpha=0.07, color=SL_C)
+    else:
+        ax.axhspan(tp,  entry, alpha=0.07, color=TP_C)
+        ax.axhspan(entry, sl,  alpha=0.07, color=SL_C)
 
-    # TP/SL %
-    tp_pct = f"+{(tp-entry)/entry*100:.2f}%"
-    sl_pct = f"-{(entry-sl)/entry*100:.2f}%"
+    # Label'lar — o'ng tomonda
+    lbl_x = x_extend + 0.5
+    tp_sign  = "+" if direction == "LONG" else "-"
+    sl_sign  = "-" if direction == "LONG" else "+"
+    tp_pct   = abs((tp - entry) / entry * 100)
+    sl_pct   = abs((sl - entry) / entry * 100)
 
-    ax.set_xlim(-1, x_right + 5)
+    ax.text(lbl_x, tp, f"🎯 TP\n${_fmt(tp)}\n{tp_sign}{tp_pct:.2f}%",
+            color=TP_C,    fontsize=7.5, va="center", fontweight="bold")
+    ax.text(lbl_x, sl, f"🛡 SL\n${_fmt(sl)}\n{sl_sign}{sl_pct:.2f}%",
+            color=SL_C,    fontsize=7.5, va="center", fontweight="bold")
+    ax.text(lbl_x, entry, f"⚡ Entry\n${_fmt(entry)}",
+            color=ENTRY_C, fontsize=7.5, va="center", fontweight="bold")
+
+    ax.set_xlim(-1, lbl_x + 8)
+
+    # ── Sarlavha ──
+    dir_sym = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
     ax.set_title(
-        f"{symbol}  •  {timeframe}  |  🔷 Trend Buzish (W-Pattern)  "
-        f"•  🟢 LONG  •  {conf}% ishonch",
-        color=PAT_C, fontsize=10, fontweight="bold", pad=10
+        f"{symbol}  •  {timeframe}  |  🔷 Trend Chiziq Buzildi  "
+        f"•  {dir_sym}  •  {conf}% ishonch",
+        color=TREND_C, fontsize=10, fontweight="bold", pad=10
     )
 
-    import matplotlib.patches as mpatches
+    # Legenda
     patches = [
-        mpatches.Patch(color=NECK_C,  label=f"Neckline ${_fmt(neckline)}"),
-        mpatches.Patch(color=ENTRY_C, label=f"Entry ${_fmt(entry)}"),
-        mpatches.Patch(color=TP_C,    label=f"TP (0.618) ${_fmt(tp)}  {tp_pct}"),
-        mpatches.Patch(color=SL_C,    label=f"SL ${_fmt(sl)}  {sl_pct}"),
-        mpatches.Patch(color=PAT_C,   label="W-Pattern (1→2→3→4→5)"),
+        mpatches.Patch(color=TREND_C, label="Sariq trend chiziq (yuqori & pastki)"),
+        mpatches.Patch(color=BRK_C,   label=f"★ Breakout kirish ${_fmt(entry)}"),
+        mpatches.Patch(color=TP_C,    label=f"TP ${_fmt(tp)}  ({tp_sign}{tp_pct:.2f}%)"),
+        mpatches.Patch(color=SL_C,    label=f"SL ${_fmt(sl)}  ({sl_sign}{sl_pct:.2f}%)"),
     ]
     ax.legend(handles=patches, loc="upper left", fontsize=7.5,
               facecolor=BG, edgecolor=GRID, labelcolor=TEXT_C, framealpha=0.9)
 
-    fig.text(0.99, 0.01, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    fig.text(0.99, 0.01,
+             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
              color="#4b5563", fontsize=6.5, ha="right")
 
     plt.tight_layout(pad=0.6)
