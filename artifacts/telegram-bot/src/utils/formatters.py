@@ -329,25 +329,11 @@ def format_history(orders: list, period_label: str = "TARIX", trade_type: str = 
 
     total = win_count + loss_count
     wr = (win_count / total * 100) if total > 0 else 0
-
-    # Win/loss tavsifi
-    if total == 0:
-        wr_desc = "📊 Hali savdo yo'q"
-    elif win_count == 0:
-        wr_desc = f"❌ <b>{total} tadan hammasi zarar</b>"
-    elif loss_count == 0:
-        wr_desc = f"✅ <b>{total} tadan hammasi foyda!</b>"
-    else:
-        wr_desc = (
-            f"📊 <b>{total} ta pozitsiyadan:</b>\n"
-            f"   ✅ <b>{win_count} tasi foyda</b>  |  ❌ <b>{loss_count} tasi zarar</b>"
-        )
-
+    pnl_pct_total = ""
     lines += [
         f"\n{'═'*28}",
         f"{pnl_emoji(total_pnl)} <b>JAMI NET PnL: <code>{total_pnl:+.4f} USDT</code></b>",
-        wr_desc,
-        f"🏆 <b>Win Rate:</b> <code>{wr:.1f}%</code>",
+        f"🏆 <b>Win Rate:</b> <code>{wr:.1f}%</code>  ✅{win_count} / ❌{loss_count}",
         f"🏦 <b>Jami Fee:</b> <code>-{total_fee:.4f} USDT</code>",
         f"🕒 <i>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</i>",
     ]
