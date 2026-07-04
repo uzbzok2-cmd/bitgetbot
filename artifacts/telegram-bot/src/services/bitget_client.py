@@ -218,6 +218,24 @@ class BitgetClient:
             "size": size
         })
 
+    def place_futures_tpsl_both(self, symbol: str, tp_price: str, sl_price: str,
+                                 side: str, size: str, product_type: str = "USDT-FUTURES",
+                                 margin_coin: str = "USDT") -> dict:
+        """TP va SL ni BITTA so'rovda qo'yish — profit_loss planType bilan."""
+        return self._post("/api/v2/mix/order/place-tpsl-order", {
+            "symbol": symbol,
+            "productType": product_type,
+            "marginCoin": margin_coin,
+            "planType": "profit_loss",
+            "triggerPrice": tp_price,
+            "stopLossTriggerPrice": sl_price,
+            "triggerType": "mark_price",
+            "executePrice": "0",
+            "stopLossExecutePrice": "0",
+            "holdSide": side,
+            "size": size
+        })
+
     def close_futures_position(self, symbol: str, hold_side: str, product_type: str = "USDT-FUTURES", margin_coin: str = "USDT") -> dict:
         return self._post("/api/v2/mix/order/close-positions", {
             "symbol": symbol,
