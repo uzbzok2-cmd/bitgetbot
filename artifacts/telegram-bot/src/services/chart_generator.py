@@ -725,6 +725,139 @@ def generate_pattern_chart(
     return buf
 
 
+def generate_trend_break_chart(candles_data: list, pat: dict) -> io.BytesIO:
+    """W-Pattern (Trend Buzish) chart — 5 nuqta, neckline, TP, SL."""
+    timestamps, opens, highs, lows, closes, vols = _make_candles(candles_data)
+    if not closes:
+        return _empty_chart(pat.get("symbol", "?"))
+
+    symbol    = pat["symbol"]
+    timeframe = pat["timeframe"]
+    entry     = pat["entry"]
+    tp        = pat["tp"]
+    sl        = pat["sl"]
+    conf      = pat["confidence"]
+    neckline  = pat["neckline"]
+    window    = pat.get("window", 80)
+
+    p1_idx = pat["p1_idx"]
+    p2_idx = pat["p2_idx"]
+    p3_idx = pat["p3_idx"]
+    p4_idx = pat["p4_idx"]
+    p5_idx = pat["p5_idx"]
+
+    BG       = "#0d1117"; GRID   = "#1f2937"
+    UP_BODY  = "#26a69a"; DN_BODY = "#ef5350"
+    WICK     = "#6b7280"; TEXT_C  = "#e5e7eb"
+    ENTRY_C  = "#f59e0b"; TP_C    = "#22c55e"
+    SL_C     = "#ef4444"; NECK_C  = "#60a5fa"
+    PAT_C    = "#a78bfa"
+
+    # Windowed candles
+    n = min(window, len(closes))
+    op_n = opens[-n:]; hi_n = highs[-n:]
+    lo_n = lows[-n:]; cl_n = closes[-n:]
+
+    fig, ax = plt.subplots(figsize=(12, 6.5), facecolor=BG)
+    ax.set_facecolor(BG)
+    ax.grid(True, color=GRID, linewidth=0.4, alpha=0.7)
+    ax.tick_params(colors=TEXT_C, labelsize=7)
+    for spine in ax.spines.values():
+        spine.set_edgecolor(GRID)
+
+    # Candlestick
+    w_bar = 0.6
+    for i, (o, h, l, c) in enumerate(zip(op_n, hi_n, lo_n, cl_n)):
+        color   = UP_BODY if c >= o else DN_BODY
+        body_lo = min(o, c); body_hi = max(o, c)
+        ax.bar(i, max(body_hi - body_lo, 1e-10), width=w_bar,
+               bottom=body_lo, color=color, linewidth=0)
+        ax.plot([i, i], [l, body_lo],  color=WICK, linewidth=0.8)
+        ax.plot([i, i], [body_hi, h],  color=WICK, linewidth=0.8)
+
+    x_right = n + 3
+
+    # Neckline (ko'k gorizontal chiziq — P3 sathida)
+    ax.axhline(neckline, color=NECK_C, linewidth=1.5, linestyle="--", alpha=0.9,
+               label=f"Neckline  ${_fmt(neckline)}")
+
+    # TP va SL chiziqlar
+    ax.axhline(tp, color=TP_C, linewidth=1.4, linestyle="--", alpha=0.85)
+    ax.axhline(sl, color=SL_C, linewidth=1.4, linestyle="--", alpha=0.85)
+
+    # Label'lar o'ng tomonga
+    ax.text(x_right, tp, f"🎯 TP (0.618)\n${_fmt(tp)}", color=TP_C,
+            fontsize=7.5, va="center", fontweight="bold")
+    ax.text(x_right, sl, f"🛡 SL\n${_fmt(sl)}", color=SL_C,
+            fontsize=7.5, va="center", fontweight="bold")
+    ax.text(x_right, entry, f"⚡ Entry\n${_fmt(entry)}", color=ENTRY_C,
+            fontsize=7.5, va="center", fontweight="bold")
+    ax.text(x_right, neckline, f"🔵 Neck\n${_fmt(neckline)}", color=NECK_C,
+            fontsize=7, va="center")
+
+    # 5 ta pattern nuqtasini belgilash
+    point_x  = [p1_idx, p2_idx, p3_idx, p4_idx, p5_idx]
+    point_y  = [pat["p1_price"], pat["p2_price"],
+                pat["p3_price"], pat["p4_price"], pat["p5_price"]]
+    offsets  = [  # label offset (up/down)
+        (pat["p1_price"], "top",    "#ffffff"),
+        (pat["p2_price"], "bottom", "#ffffff"),
+        (pat["p3_price"], "top",    "#ffffff"),
+        (pat["p4_price"], "bottom", "#ffffff"),
+        (pat["p5_price"], "top",    "#22c55e"),
+    ]
+    labels   = ["①", "②", "③", "④", "⑤"]
+
+    for i, (xi, yi, lbl, (yy, va, clr)) in enumerate(
+            zip(point_x, point_y, labels, offsets)):
+        ax.scatter(xi, yi, s=55, color=PAT_C, zorder=6)
+        ax.text(xi, yy, lbl, color=clr, fontsize=9, ha="center",
+                va=va, fontweight="bold",
+                bbox=dict(facecolor=BG, alpha=0.7, edgecolor="none", pad=1.5))
+
+    # W-pattern chiziq (1→2→3→4→5)
+    xs = point_x
+    ys = [pat["p1_price"], pat["p2_price"],
+          pat["p3_price"], pat["p4_price"], pat["p5_price"]]
+    ax.plot(xs, ys, color=PAT_C, linewidth=1.3, alpha=0.6, linestyle="-")
+
+    # TP zonasi (yashil shading)
+    ax.axhspan(entry, tp, alpha=0.06, color=TP_C)
+    ax.axhspan(sl, entry, alpha=0.06, color=SL_C)
+
+    # TP/SL %
+    tp_pct = f"+{(tp-entry)/entry*100:.2f}%"
+    sl_pct = f"-{(entry-sl)/entry*100:.2f}%"
+
+    ax.set_xlim(-1, x_right + 5)
+    ax.set_title(
+        f"{symbol}  •  {timeframe}  |  🔷 Trend Buzish (W-Pattern)  "
+        f"•  🟢 LONG  •  {conf}% ishonch",
+        color=PAT_C, fontsize=10, fontweight="bold", pad=10
+    )
+
+    import matplotlib.patches as mpatches
+    patches = [
+        mpatches.Patch(color=NECK_C,  label=f"Neckline ${_fmt(neckline)}"),
+        mpatches.Patch(color=ENTRY_C, label=f"Entry ${_fmt(entry)}"),
+        mpatches.Patch(color=TP_C,    label=f"TP (0.618) ${_fmt(tp)}  {tp_pct}"),
+        mpatches.Patch(color=SL_C,    label=f"SL ${_fmt(sl)}  {sl_pct}"),
+        mpatches.Patch(color=PAT_C,   label="W-Pattern (1→2→3→4→5)"),
+    ]
+    ax.legend(handles=patches, loc="upper left", fontsize=7.5,
+              facecolor=BG, edgecolor=GRID, labelcolor=TEXT_C, framealpha=0.9)
+
+    fig.text(0.99, 0.01, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+             color="#4b5563", fontsize=6.5, ha="right")
+
+    plt.tight_layout(pad=0.6)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=140, facecolor=BG, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 def _fmt(p: float) -> str:
     if p >= 1000:
         return f"{p:,.2f}"
